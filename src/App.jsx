@@ -104,6 +104,33 @@ function fullSlotLabel(hours, slotKey) { const st = SLOT_BY_KEY[slotKey]; const 
 // (price > 0), the month's charge is transferred to another confirmed occurrence still in that
 // same calendar month, if one exists — so cancelling a single week never silently waives billing.
 /* ============================== MONTHLY PRICE HELPER ============================== */
+// Whenever a user has more than one active "fixo mensal" reservation, they should be billed once
+// per month (one combined charge), not once per reservation. This picks a stable "carrier" group
+// (deterministic regardless of render order) to hold the combined charge, zeroes every other
+// group's future occurrences, and preserves the total value already in place across the merge.
+function consolidateUserFixedBilling(allBookings, userId, today) {
+  const userGroupIds = [...new Set(
+    allBookings.filter(b => b.userId === userId && b.recurrence === 'fixa_mensal' && b.groupId && b.status === 'confirmada').map(b => b.groupId)
+  )].sort();
+  if (userGroupIds.length <= 1) return allBookings;
+
+  let total = 0;
+  userGroupIds.forEach(gid => {
+    const groupBookings = allBookings.filter(b => b.groupId === gid && b.status === 'confirmada').sort((a, b) => a.date < b.date ? -1 : 1);
+    const futureCharge = groupBookings.find(b => b.price > 0 && b.date >= today);
+    const anyCharge = groupBookings.find(b => b.price > 0);
+    total += (futureCharge || anyCharge)?.price || 0;
+  });
+
+  const carrierGid = userGroupIds[0];
+  let updated = allBookings;
+  userGroupIds.forEach(gid => {
+    updated = updated.map(b => (b.groupId === gid && b.status === 'confirmada' && b.date >= today) ? { ...b, price: 0 } : b);
+  });
+  updated = applyMonthlyPriceToGroup(updated, carrierGid, total, today);
+  return updated;
+}
+
 function applyMonthlyPriceToGroup(allBookings, groupId, newPrice, today) {
   const groupConfirmed = allBookings.filter(b => b.groupId === groupId && b.status === 'confirmada').sort((a, b) => a.date < b.date ? -1 : 1);
   const seenMonths = new Set();
@@ -964,7 +991,7 @@ function ManagerBookTab({ data, profile, showToast }) {
         allBookings: updated, room, groupId: baseBooking.id, startDate: baseBooking.date, slotType, slotLabel: baseBooking.slotLabel,
         newEndDate: recurrenceEndDate, userId: targetUser.id, userName: targetUser.name, roomId: room.id, roomName: room.name, price: finalPrice, requestedAt: now, dueDay: finalDueDay,
       });
-      updated = reconciled; addedCount = added;
+      updated = consolidateUserFixedBilling(reconciled, targetUser.id, todayStr()); addedCount = added;
     }
     await data.syncBookings(updated);
     setBusy(false); setSelectedDate(null); setSlotType(null); setRecurrence('avulsa'); setRecurrenceEndDate(''); setDueDay('');
@@ -1047,7 +1074,7 @@ function RequestsTab({ data, showToast }) {
       const room = (data.rooms || []).find(r => r.id === booking.roomId);
       const endDate = booking.recurrenceEndDate || addDays(booking.date, 90);
       const { updated: reconciled, added } = reconcileRecurringGroup({ allBookings: updated, room, groupId: booking.id, startDate: booking.date, slotType: booking.slotType, slotLabel: booking.slotLabel, newEndDate: endDate, userId: booking.userId, userName: booking.userName, roomId: booking.roomId, roomName: booking.roomName, price: finalPrice, requestedAt: booking.requestedAt, dueDay: finalDueDay });
-      updated = reconciled;
+      updated = consolidateUserFixedBilling(reconciled, booking.userId, todayStr());
       showToast(`Reserva confirmada a ${fmtMoney(finalPrice)}/mês (vencimento todo dia ${finalDueDay}) + ${added} ocorrências geradas até ${fmtBR(endDate)}.`, 'ok');
     } else showToast('Reserva confirmada.', 'ok');
     await data.syncBookings(updated);
@@ -1325,7 +1352,8 @@ function RecurringTab({ data, showToast }) {
       newEndDate: draftDate, userId: g.rep.userId, userName: g.rep.userName, roomId: g.rep.roomId, roomName: g.rep.roomName,
       price: g.currentPrice, requestedAt: g.rep.requestedAt, dueDay: g.dueDay,
     });
-    await data.syncBookings(updated);
+    const consolidated = consolidateUserFixedBilling(updated, g.rep.userId, today);
+    await data.syncBookings(consolidated);
     setEditing(null);
     const parts = [];
     if (added) parts.push(`${added} nova(s) data(s) gerada(s)`);
@@ -1352,7 +1380,8 @@ function RecurringTab({ data, showToast }) {
 
   const saveTotal = async (u) => {
     const newTotal = Number(draftTotal) || 0;
-    const carrier = u.groups[0]; // whichever fixed slot appears first (by weekday) carries the single combined charge
+    const carrierGid = [...u.groups].map(g => g.gid).sort()[0];
+    const carrier = u.groups.find(g => g.gid === carrierGid);
     let updated = all;
     // Zero out every group's future charges first...
     u.groups.forEach(g => {
@@ -1366,7 +1395,8 @@ function RecurringTab({ data, showToast }) {
   };
 
   const cancelWholeGroup = async (g) => {
-    const updated = all.map(b => (b.groupId === g.gid && b.status === 'confirmada' && b.date >= today) ? { ...b, status: 'cancelada' } : b);
+    const cancelled = all.map(b => (b.groupId === g.gid && b.status === 'confirmada' && b.date >= today) ? { ...b, status: 'cancelada' } : b);
+    const updated = consolidateUserFixedBilling(cancelled, g.rep.userId, today);
     await data.syncBookings(updated);
     setEditing(null);
     showToast(`Locação de ${g.rep.userName} cancelada — reservas futuras removidas do calendário.`, 'ok');
@@ -1483,11 +1513,39 @@ function RecurringTab({ data, showToast }) {
 /* ============================== MANAGER: FINANCE ============================== */
 function FinanceTab({ data, showToast }) {
   const [filter, setFilter] = useState('todos');
+  const [showFuture, setShowFuture] = useState(false);
   const all = (data.bookings || []).filter(b => b.status === 'confirmada');
-  const totals = financeForBookings(all);
-  const filtered = all.filter(b => b.price > 0 && (filter === 'todos' || paymentBadgeStatus(b) === filter)).sort((a, b) => a.date < b.date ? 1 : -1);
+  const currentMonthKey = todayStr().slice(0, 7);
+  const isFutureMonth = (b) => dueDateFor(b).slice(0, 7) > currentMonthKey;
+
+  const currentAll = all.filter(b => !isFutureMonth(b));
+  const futureAll = all.filter(b => isFutureMonth(b) && b.price > 0);
+  const totals = financeForBookings(currentAll);
+  const futureTotal = futureAll.reduce((sum, b) => sum + b.price, 0);
+
+  const filtered = currentAll.filter(b => b.price > 0 && (filter === 'todos' || paymentBadgeStatus(b) === filter)).sort((a, b) => dueDateFor(a) < dueDateFor(b) ? 1 : -1);
+  const futureSorted = futureAll.slice().sort((a, b) => dueDateFor(a) < dueDateFor(b) ? -1 : 1);
+
   const togglePaid = async (b) => { const updated = (data.bookings || []).map(x => x.id === b.id ? { ...x, paymentStatus: x.paymentStatus === 'pago' ? 'pendente' : 'pago', paidAt: x.paymentStatus === 'pago' ? null : Date.now() } : x); await data.syncBookings(updated); showToast(b.paymentStatus === 'pago' ? 'Marcado como não pago.' : 'Pagamento registrado.', 'ok'); };
   const cancelBooking = async (b) => { const updated = cancelBookingUpdate(b, data.bookings || []); await data.syncBookings(updated); showToast(`Reserva de ${fmtBR(b.date)} cancelada.`, 'ok'); };
+
+  const row = (b) => (
+    <Card key={b.id} style={{ padding: '13px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+      <div>
+        <div className="rk-body" style={{ fontSize: 13.5, fontWeight: 600, color: C.ink }}>{b.userName}</div>
+        <div className="rk-body" style={{ fontSize: 12, color: C.inkMuted, marginTop: 2 }}>
+          {b.roomName} · {b.slotLabel} · <span className="rk-mono">{fmtBR(b.date)}</span>
+          {b.recurrence === 'fixa_mensal' && <span className="rk-mono"> · vence {fmtBR(dueDateFor(b))}</span>}
+        </div>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <span className="rk-mono" style={{ fontWeight: 650, color: C.ink, fontSize: 14 }}>{fmtMoney(b.price)}</span><Badge tone={paymentBadgeStatus(b)}>{paymentBadgeStatus(b)}</Badge>
+        <Btn size="sm" variant={b.paymentStatus === 'pago' ? 'subtle' : 'success'} icon={b.paymentStatus === 'pago' ? X : Check} onClick={() => togglePaid(b)}>{b.paymentStatus === 'pago' ? 'Desmarcar' : 'Recebido'}</Btn>
+        {b.date >= todayStr() && <Btn size="sm" variant="danger" icon={X} onClick={() => cancelBooking(b)}>Cancelar</Btn>}
+      </div>
+    </Card>
+  );
+
   return (
     <div className="rk-fade">
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 18 }}>
@@ -1499,17 +1557,17 @@ function FinanceTab({ data, showToast }) {
         ))}
       </div>
       {filtered.length === 0 ? <div className="rk-body" style={{ color: C.inkFaint, fontSize: 13.5, padding: '20px 0' }}>Nenhum lançamento nesta categoria.</div> : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {filtered.map(b => (
-            <Card key={b.id} style={{ padding: '13px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-              <div><div className="rk-body" style={{ fontSize: 13.5, fontWeight: 600, color: C.ink }}>{b.userName}</div><div className="rk-body" style={{ fontSize: 12, color: C.inkMuted, marginTop: 2 }}>{b.roomName} · {b.slotLabel} · <span className="rk-mono">{fmtBR(b.date)}</span></div></div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <span className="rk-mono" style={{ fontWeight: 650, color: C.ink, fontSize: 14 }}>{fmtMoney(b.price)}</span><Badge tone={paymentBadgeStatus(b)}>{paymentBadgeStatus(b)}</Badge>
-                <Btn size="sm" variant={b.paymentStatus === 'pago' ? 'subtle' : 'success'} icon={b.paymentStatus === 'pago' ? X : Check} onClick={() => togglePaid(b)}>{b.paymentStatus === 'pago' ? 'Desmarcar' : 'Recebido'}</Btn>
-                {b.date >= todayStr() && <Btn size="sm" variant="danger" icon={X} onClick={() => cancelBooking(b)}>Cancelar</Btn>}
-              </div>
-            </Card>
-          ))}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>{filtered.map(row)}</div>
+      )}
+
+      {futureSorted.length > 0 && (
+        <div style={{ marginTop: 24 }}>
+          <button onClick={() => setShowFuture(!showFuture)} className="rk-body rk-btn rk-focus" style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'none', border: 'none', cursor: 'pointer', padding: '8px 0', width: '100%', borderTop: `1px solid ${C.borderSoft}` }}>
+            {showFuture ? <ChevronLeft size={14} style={{ transform: 'rotate(-90deg)' }} /> : <ChevronRight size={14} />}
+            <span style={{ fontSize: 13, fontWeight: 650, color: C.ink }}>Lançamentos futuros</span>
+            <span style={{ fontSize: 12, color: C.inkFaint }}>({futureSorted.length} · {fmtMoney(futureTotal)} nos próximos meses)</span>
+          </button>
+          {showFuture && <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 }}>{futureSorted.map(row)}</div>}
         </div>
       )}
     </div>
