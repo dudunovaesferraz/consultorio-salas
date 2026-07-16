@@ -103,6 +103,23 @@ function fullSlotLabel(hours, slotKey) { const st = SLOT_BY_KEY[slotKey]; const 
 // Cancels a confirmed booking. If it was the charge-bearing occurrence of a "fixo mensal" plan
 // (price > 0), the month's charge is transferred to another confirmed occurrence still in that
 // same calendar month, if one exists — so cancelling a single week never silently waives billing.
+/* ============================== MONTHLY PRICE HELPER ============================== */
+function applyMonthlyPriceToGroup(allBookings, groupId, newPrice, today) {
+  const groupConfirmed = allBookings.filter(b => b.groupId === groupId && b.status === 'confirmada').sort((a, b) => a.date < b.date ? -1 : 1);
+  const seenMonths = new Set();
+  const isFirstOfMonth = new Map();
+  groupConfirmed.forEach(b => {
+    const mk = b.date.slice(0, 7);
+    const first = !seenMonths.has(mk);
+    if (first) seenMonths.add(mk);
+    isFirstOfMonth.set(b.id, first);
+  });
+  return allBookings.map(b => {
+    if (b.groupId !== groupId || b.status !== 'confirmada' || b.date < today) return b;
+    return { ...b, price: isFirstOfMonth.get(b.id) ? newPrice : 0 };
+  });
+}
+
 function cancelBookingUpdate(booking, allBookings) {
   let updated = allBookings.map(b => b.id === booking.id ? { ...b, status: 'cancelada' } : b);
   if (booking.recurrence === 'fixa_mensal' && booking.price > 0) {
@@ -490,6 +507,95 @@ function Shell({ user, onLogout, tabs, active, setActive, children, syncing, onR
         </div>
       </header>
       <main style={{ maxWidth: 1100, margin: '0 auto', padding: '22px 18px 60px' }}>{children}</main>
+    </div>
+  );
+}
+
+/* ============================== MANAGER: AGENDA CALENDAR ============================== */
+function eventTimeLabel(slotLabel) {
+  const m = (slotLabel || '').match(/\((\d{2}:\d{2})/);
+  return m ? m[1] : '';
+}
+function AgendaCalendarTab({ data }) {
+  const [cursor, setCursor] = useState(() => { const d = new Date(); d.setDate(1); return d; });
+  const [selectedDate, setSelectedDate] = useState(todayStr());
+  const year = cursor.getFullYear(), month = cursor.getMonth();
+  const first = new Date(year, month, 1);
+  const gridStart = new Date(year, month, 1 - first.getDay());
+  const days = Array.from({ length: 42 }, (_, i) => { const d = new Date(gridStart); d.setDate(gridStart.getDate() + i); return d; });
+
+  const bookingsByDate = {};
+  (data.bookings || []).filter(b => b.status === 'confirmada' || b.status === 'pendente').forEach(b => {
+    if (!bookingsByDate[b.date]) bookingsByDate[b.date] = [];
+    bookingsByDate[b.date].push(b);
+  });
+  Object.values(bookingsByDate).forEach(list => list.sort((a, b) => eventTimeLabel(a.slotLabel).localeCompare(eventTimeLabel(b.slotLabel))));
+
+  const dayEvents = bookingsByDate[selectedDate] || [];
+
+  return (
+    <div className="rk-fade" style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(260px, 320px)', gap: 20 }}>
+      <Card style={{ padding: '16px 16px 18px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+          <button onClick={() => setCursor(new Date(year, month - 1, 1))} className="rk-btn rk-focus" style={{ background: 'none', border: `1px solid ${C.border}`, borderRadius: 7, width: 28, height: 28, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><ChevronLeft size={15} /></button>
+          <span className="rk-display" style={{ fontWeight: 650, fontSize: 16, color: C.ink }}>{MONTH_NAMES[month]} {year}</span>
+          <button onClick={() => setCursor(new Date(year, month + 1, 1))} className="rk-btn rk-focus" style={{ background: 'none', border: `1px solid ${C.border}`, borderRadius: 7, width: 28, height: 28, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><ChevronRight size={15} /></button>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', gap: 4, marginBottom: 4 }}>
+          {WK_SHORT.map(d => <div key={d} className="rk-body" style={{ textAlign: 'center', fontSize: 10.5, fontWeight: 700, color: C.inkFaint, padding: '2px 0' }}>{d}</div>)}
+        </div>
+        <div className="rk-scroll" style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', gap: 4, overflowX: 'auto' }}>
+          {days.map((d, i) => {
+            const ds = dstr(d);
+            const inMonth = d.getMonth() === month;
+            const events = bookingsByDate[ds] || [];
+            const isSelected = ds === selectedDate;
+            const isToday = ds === todayStr();
+            return (
+              <button key={i} onClick={() => setSelectedDate(ds)} className="rk-btn rk-focus" style={{
+                minHeight: 76, textAlign: 'left', padding: '4px 5px', borderRadius: 8, minWidth: 0,
+                border: `1.5px solid ${isSelected ? C.primary : isToday ? C.accent : C.borderSoft}`,
+                background: isSelected ? C.primaryLight : C.surface, opacity: inMonth ? 1 : 0.35,
+                cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 2, overflow: 'hidden',
+              }}>
+                <span className="rk-mono" style={{ fontSize: 11, fontWeight: 700, color: isSelected ? C.primaryDark : C.inkMuted }}>{d.getDate()}</span>
+                {events.slice(0, 3).map(e => (
+                  <div key={e.id} className="rk-body" style={{
+                    fontSize: 9.5, fontWeight: 600, borderRadius: 4, padding: '1px 4px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                    background: e.status === 'pendente' ? C.warningLight : C.successLight, color: e.status === 'pendente' ? C.warning : C.success,
+                  }}>{eventTimeLabel(e.slotLabel)} {e.userName}</div>
+                ))}
+                {events.length > 3 && <span className="rk-body" style={{ fontSize: 9, color: C.inkFaint }}>+{events.length - 3} mais</span>}
+              </button>
+            );
+          })}
+        </div>
+        <div style={{ display: 'flex', gap: 14, marginTop: 14, flexWrap: 'wrap' }}>
+          <Legend color={C.successLight} border={C.success} label="Confirmada" />
+          <Legend color={C.warningLight} border={C.warning} label="Pendente" />
+        </div>
+      </Card>
+
+      <Card style={{ padding: 18 }}>
+        <div className="rk-display" style={{ fontSize: 16, fontWeight: 650, marginBottom: 4, color: C.ink }}>{fmtBR(selectedDate)}</div>
+        <div className="rk-body" style={{ fontSize: 12.5, color: C.inkMuted, marginBottom: 16 }}>{WK_LABEL[weekdayKey(selectedDate)]}</div>
+        {dayEvents.length === 0 ? (
+          <div className="rk-body" style={{ fontSize: 13, color: C.inkFaint, padding: '10px 0' }}>Nenhuma reserva neste dia.</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {dayEvents.map(e => (
+              <div key={e.id} style={{ padding: '10px 12px', border: `1px solid ${C.borderSoft}`, borderRadius: 9 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                  <div className="rk-body" style={{ fontSize: 13.5, fontWeight: 650, color: C.ink }}>{e.userName}</div>
+                  <Badge tone={e.status}>{e.status}</Badge>
+                </div>
+                <div className="rk-body" style={{ fontSize: 12, color: C.inkMuted, marginTop: 3 }}>{e.roomName} · {e.slotLabel}</div>
+                {e.recurrence === 'fixa_mensal' && <div className="rk-body" style={{ fontSize: 11, color: C.inkFaint, marginTop: 3, display: 'flex', alignItems: 'center', gap: 3 }}><Repeat size={10} />fixo mensal</div>}
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
     </div>
   );
 }
@@ -1137,8 +1243,11 @@ function RoomsTab({ data, showToast }) {
 function RecurringTab({ data, showToast }) {
   const all = data.bookings || [];
   const groupIds = [...new Set(all.filter(b => b.recurrence === 'fixa_mensal' && b.groupId && b.status === 'confirmada').map(b => b.groupId))];
-  const [editing, setEditing] = useState(null);
-  const [draftDate, setDraftDate] = useState(''); const [draftPrice, setDraftPrice] = useState('');
+  const [editing, setEditing] = useState(null); // { gid, field: 'date' | 'price' | 'cancel-confirm' } | { userId, field: 'total' }
+  const [draftDate, setDraftDate] = useState('');
+  const [draftPrice, setDraftPrice] = useState('');
+  const [draftTotal, setDraftTotal] = useState('');
+
   if (groupIds.length === 0) return <div className="rk-body rk-fade" style={{ color: C.inkFaint, fontSize: 14, padding: '30px 0' }}>Nenhuma locação fixa mensal confirmada ainda.</div>;
 
   const today = todayStr();
@@ -1148,85 +1257,163 @@ function RecurringTab({ data, showToast }) {
     const active = items.filter(b => b.status === 'confirmada').sort((a, b) => a.date < b.date ? -1 : 1);
     const past = active.filter(b => b.date < today).length;
     const future = active.filter(b => b.date >= today);
+    // The charge lives on the first occurrence of each month (price > 0); other weeks are R$0 fillers.
     const charges = active.filter(b => b.price > 0);
     const futureCharges = charges.filter(b => b.date >= today);
     const currentPrice = (futureCharges[0] || charges[charges.length - 1] || rep).price;
     return { gid, rep, active, past, future: future.length, endDate: rep.recurrenceEndDate, currentPrice };
-  }).sort((a, b) => a.rep.userName.localeCompare(b.rep.userName));
+  });
+
+  const byUser = {};
+  groups.forEach(g => {
+    const uid = g.rep.userId;
+    if (!byUser[uid]) byUser[uid] = { userId: uid, userName: g.rep.userName, groups: [] };
+    byUser[uid].groups.push(g);
+  });
+  const userBlocks = Object.values(byUser).sort((a, b) => a.userName.localeCompare(b.userName)).map(u => ({
+    ...u,
+    groups: u.groups.sort((a, b) => weekdayKey(a.rep.date).localeCompare(weekdayKey(b.rep.date))),
+    total: u.groups.reduce((sum, g) => sum + g.currentPrice, 0),
+  }));
 
   const startEditDate = (g) => { setEditing({ gid: g.gid, field: 'date' }); setDraftDate(g.endDate || todayStr()); };
   const startEditPrice = (g) => { setEditing({ gid: g.gid, field: 'price' }); setDraftPrice(g.currentPrice); };
+  const startEditTotal = (u) => { setEditing({ userId: u.userId, field: 'total' }); setDraftTotal(u.total); };
+
   const saveDate = async (g) => {
-    const room = (data.rooms || []).find(r => r.id === g.rep.roomId); if (!room) return;
-    if (draftDate < g.rep.date) { showToast('A data final não pode ser anterior ao início.', 'err'); return; }
-    const { updated, added, revived, cancelled } = reconcileRecurringGroup({ allBookings: all, room, groupId: g.gid, startDate: g.rep.date, slotType: g.rep.slotType, slotLabel: g.rep.slotLabel, newEndDate: draftDate, userId: g.rep.userId, userName: g.rep.userName, roomId: g.rep.roomId, roomName: g.rep.roomName, price: g.currentPrice, requestedAt: g.rep.requestedAt });
-    await data.syncBookings(updated); setEditing(null);
-    const parts = []; if (added) parts.push(`${added} nova(s)`); if (revived) parts.push(`${revived} reativada(s)`); if (cancelled) parts.push(`${cancelled} cancelada(s)`);
+    const room = (data.rooms || []).find(r => r.id === g.rep.roomId);
+    if (!room) return;
+    if (draftDate < g.rep.date) { showToast('A data final não pode ser anterior ao início da locação.', 'err'); return; }
+    const { updated, added, revived, cancelled } = reconcileRecurringGroup({
+      allBookings: all, room, groupId: g.gid, startDate: g.rep.date, slotType: g.rep.slotType, slotLabel: g.rep.slotLabel,
+      newEndDate: draftDate, userId: g.rep.userId, userName: g.rep.userName, roomId: g.rep.roomId, roomName: g.rep.roomName,
+      price: g.currentPrice, requestedAt: g.rep.requestedAt,
+    });
+    await data.syncBookings(updated);
+    setEditing(null);
+    const parts = [];
+    if (added) parts.push(`${added} nova(s) data(s) gerada(s)`);
+    if (revived) parts.push(`${revived} reativada(s)`);
+    if (cancelled) parts.push(`${cancelled} cancelada(s)`);
     showToast(parts.length ? `Data final atualizada: ${parts.join(', ')}.` : 'Data final atualizada.', 'ok');
   };
+
   const savePrice = async (g) => {
     const newPrice = Number(draftPrice) || 0;
-    const groupConfirmed = all.filter(b => b.groupId === g.gid && b.status === 'confirmada').sort((a, b) => a.date < b.date ? -1 : 1);
-    const seenMonths = new Set();
-    const isFirstOfMonth = new Map();
-    groupConfirmed.forEach(b => {
-      const mk = b.date.slice(0, 7);
-      const first = !seenMonths.has(mk);
-      if (first) seenMonths.add(mk);
-      isFirstOfMonth.set(b.id, first);
-    });
-    const updated = all.map(b => {
-      if (b.groupId !== g.gid || b.status !== 'confirmada' || b.date < today) return b;
-      return { ...b, price: isFirstOfMonth.get(b.id) ? newPrice : 0 };
-    });
-    await data.syncBookings(updated); setEditing(null);
+    const updated = applyMonthlyPriceToGroup(all, g.gid, newPrice, today);
+    await data.syncBookings(updated);
+    setEditing(null);
     showToast(`Novo valor mensal (${fmtMoney(newPrice)}) aplicado a partir deste mês.`, 'ok');
+  };
+
+  const saveTotal = async (u) => {
+    const newTotal = Number(draftTotal) || 0;
+    let updated = all;
+    let allocated = 0;
+    u.groups.forEach((g, i) => {
+      let amt;
+      if (i === u.groups.length - 1) amt = newTotal - allocated;
+      else amt = u.total > 0 ? Math.round(newTotal * (g.currentPrice / u.total)) : Math.round(newTotal / u.groups.length);
+      allocated += amt;
+      updated = applyMonthlyPriceToGroup(updated, g.gid, amt, today);
+    });
+    await data.syncBookings(updated);
+    setEditing(null);
+    showToast(`Total mensal de ${u.userName} atualizado para ${fmtMoney(newTotal)}, distribuído entre as ${u.groups.length} reservas fixas.`, 'ok');
   };
 
   const cancelWholeGroup = async (g) => {
     const updated = all.map(b => (b.groupId === g.gid && b.status === 'confirmada' && b.date >= today) ? { ...b, status: 'cancelada' } : b);
-    await data.syncBookings(updated); setEditing(null);
+    await data.syncBookings(updated);
+    setEditing(null);
     showToast(`Locação de ${g.rep.userName} cancelada — reservas futuras removidas do calendário.`, 'ok');
   };
 
   return (
-    <div className="rk-fade" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      <div className="rk-body" style={{ fontSize: 12.5, color: C.inkMuted, marginBottom: 4, lineHeight: 1.5 }}>Cada locação fixa mensal reserva a sala toda semana, mas o valor negociado é cobrado uma vez por mês — as demais semanas do mês não geram cobrança adicional. Mudanças de valor valem a partir do mês atual, sem afetar cobranças já ocorridas.</div>
-      {groups.map(g => (
-        <Card key={g.gid} style={{ padding: '15px 18px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
-          <div>
-            <div className="rk-body" style={{ fontSize: 14.5, fontWeight: 650, color: C.ink }}>{g.rep.userName}</div>
-            <div className="rk-body" style={{ fontSize: 12.5, color: C.inkMuted, marginTop: 3, display: 'flex', gap: 8, flexWrap: 'wrap' }}><span>{g.rep.roomName} · {g.rep.slotLabel}</span><span>toda {WK_LABEL[weekdayKey(g.rep.date)]}</span></div>
-            <div className="rk-body" style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 4 }}>início <span className="rk-mono">{fmtBR(g.rep.date)}</span> · {g.past} já ocorridas · {g.future} futuras confirmadas</div>
-            {editing?.gid === g.gid && editing.field === 'cancel-confirm' ? (
-              <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                <span className="rk-body" style={{ fontSize: 11.5, color: C.danger }}>Cancelar as {g.future} reservas futuras desta locação?</span>
-                <Btn size="sm" variant="danger" icon={X} onClick={() => cancelWholeGroup(g)}>Confirmar cancelamento</Btn>
-                <Btn size="sm" variant="ghost" onClick={() => setEditing(null)}>Voltar</Btn>
-              </div>
-            ) : (
-              <button onClick={() => setEditing({ gid: g.gid, field: 'cancel-confirm' })} className="rk-body" style={{ background: 'none', border: 'none', color: C.danger, fontSize: 11, fontWeight: 600, cursor: 'pointer', padding: 0, marginTop: 8 }}>Cancelar locação</button>
-            )}
+    <div className="rk-fade" style={{ display: 'flex', flexDirection: 'column', gap: 22 }}>
+      <div className="rk-body" style={{ fontSize: 12.5, color: C.inkMuted, lineHeight: 1.5 }}>
+        Cada locação fixa mensal reserva a sala toda semana (no mesmo dia e horário), mas o valor negociado é cobrado <b>uma vez por mês</b> — as demais semanas do mês não geram cobrança adicional. Um usuário pode ter mais de uma reserva fixa (por exemplo, sexta de manhã e segunda o dia todo); nesse caso os valores aparecem agrupados, com um total mensal que você pode editar de uma vez.
+      </div>
+      {userBlocks.map(u => (
+        <div key={u.userId} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {u.groups.length > 1 && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10, padding: '0 4px' }}>
+              <span className="rk-display" style={{ fontSize: 15.5, fontWeight: 650, color: C.ink }}>{u.userName} <span className="rk-body" style={{ fontSize: 12, fontWeight: 500, color: C.inkFaint }}>· {u.groups.length} reservas fixas</span></span>
+              {editing?.userId === u.userId && editing.field === 'total' ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <div style={{ position: 'relative' }}>
+                    <span className="rk-mono" style={{ position: 'absolute', left: 9, top: 9, fontSize: 12, color: C.inkFaint }}>R$</span>
+                    <input type="number" min="0" autoFocus className="rk-focus rk-mono" style={{ ...inputStyle, width: 130, paddingLeft: 30 }} value={draftTotal} onChange={e => setDraftTotal(e.target.value)} />
+                  </div>
+                  <Btn size="sm" variant="success" icon={Check} onClick={() => saveTotal(u)}>Salvar total</Btn>
+                  <Btn size="sm" variant="ghost" onClick={() => setEditing(null)}>Cancelar</Btn>
+                </div>
+              ) : (
+                <div style={{ textAlign: 'right' }}>
+                  <div className="rk-body" style={{ fontSize: 10.5, fontWeight: 600, color: C.inkFaint, textTransform: 'uppercase' }}>Total mensal (todas as reservas)</div>
+                  <div className="rk-mono" style={{ fontSize: 15, fontWeight: 650, color: C.primaryDark }}>{fmtMoney(u.total)}/mês</div>
+                  <button onClick={() => startEditTotal(u)} className="rk-body" style={{ background: 'none', border: 'none', color: C.primary, fontSize: 11, fontWeight: 600, cursor: 'pointer', padding: 0, marginTop: 2 }}>alterar total</button>
+                </div>
+              )}
+            </div>
+          )}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {u.groups.map(g => (
+              <Card key={g.gid} style={{ padding: '15px 18px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 14, flexWrap: 'wrap', border: u.groups.length > 1 ? `1px solid ${C.borderSoft}` : undefined }}>
+                <div>
+                  {u.groups.length === 1 && <div className="rk-body" style={{ fontSize: 14.5, fontWeight: 650, color: C.ink }}>{g.rep.userName}</div>}
+                  <div className="rk-body" style={{ fontSize: 12.5, color: C.inkMuted, marginTop: 3, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <span>{g.rep.roomName} · {g.rep.slotLabel}</span>
+                    <span>toda {WK_LABEL[weekdayKey(g.rep.date)]}</span>
+                  </div>
+                  <div className="rk-body" style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 4 }}>
+                    início <span className="rk-mono">{fmtBR(g.rep.date)}</span> · {g.past} já ocorridas · {g.future} futuras confirmadas
+                  </div>
+                  {editing?.gid === g.gid && editing.field === 'cancel-confirm' ? (
+                    <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <span className="rk-body" style={{ fontSize: 11.5, color: C.danger }}>Cancelar as {g.future} reservas futuras desta locação?</span>
+                      <Btn size="sm" variant="danger" icon={X} onClick={() => cancelWholeGroup(g)}>Confirmar cancelamento</Btn>
+                      <Btn size="sm" variant="ghost" onClick={() => setEditing(null)}>Voltar</Btn>
+                    </div>
+                  ) : (
+                    <button onClick={() => setEditing({ gid: g.gid, field: 'cancel-confirm' })} className="rk-body" style={{ background: 'none', border: 'none', color: C.danger, fontSize: 11, fontWeight: 600, cursor: 'pointer', padding: 0, marginTop: 8 }}>Cancelar locação</button>
+                  )}
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 18, flexWrap: 'wrap' }}>
+                  {editing?.gid === g.gid && editing.field === 'price' ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <div style={{ position: 'relative' }}>
+                        <span className="rk-mono" style={{ position: 'absolute', left: 9, top: 9, fontSize: 12, color: C.inkFaint }}>R$</span>
+                        <input type="number" min="0" autoFocus className="rk-focus rk-mono" style={{ ...inputStyle, width: 120, paddingLeft: 30 }} value={draftPrice} onChange={e => setDraftPrice(e.target.value)} />
+                      </div>
+                      <Btn size="sm" variant="success" icon={Check} onClick={() => savePrice(g)}>Salvar</Btn>
+                      <Btn size="sm" variant="ghost" onClick={() => setEditing(null)}>Cancelar</Btn>
+                    </div>
+                  ) : (
+                    <div style={{ textAlign: 'right' }}>
+                      <div className="rk-body" style={{ fontSize: 10.5, fontWeight: 600, color: C.inkFaint, textTransform: 'uppercase' }}>Valor negociado</div>
+                      <div className="rk-mono" style={{ fontSize: 14, fontWeight: 650, color: C.ink }}>{fmtMoney(g.currentPrice)}/mês</div>
+                      <button onClick={() => startEditPrice(g)} className="rk-body" style={{ background: 'none', border: 'none', color: C.primary, fontSize: 11, fontWeight: 600, cursor: 'pointer', padding: 0, marginTop: 2 }}>alterar</button>
+                    </div>
+                  )}
+                  {editing?.gid === g.gid && editing.field === 'date' ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <input type="date" autoFocus className="rk-focus rk-mono" style={{ ...inputStyle, width: 150 }} min={g.rep.date} value={draftDate} onChange={e => setDraftDate(e.target.value)} />
+                      <Btn size="sm" variant="success" icon={Check} onClick={() => saveDate(g)}>Salvar</Btn>
+                      <Btn size="sm" variant="ghost" onClick={() => setEditing(null)}>Cancelar</Btn>
+                    </div>
+                  ) : (
+                    <div style={{ textAlign: 'right' }}>
+                      <div className="rk-body" style={{ fontSize: 10.5, fontWeight: 600, color: C.inkFaint, textTransform: 'uppercase' }}>Repete até</div>
+                      <div className="rk-mono" style={{ fontSize: 14, fontWeight: 650, color: C.ink }}>{fmtBR(g.endDate)}</div>
+                      <button onClick={() => startEditDate(g)} className="rk-body" style={{ background: 'none', border: 'none', color: C.primary, fontSize: 11, fontWeight: 600, cursor: 'pointer', padding: 0, marginTop: 2 }}>alterar</button>
+                    </div>
+                  )}
+                </div>
+              </Card>
+            ))}
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 18, flexWrap: 'wrap' }}>
-            {editing?.gid === g.gid && editing.field === 'price' ? (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <div style={{ position: 'relative' }}><span className="rk-mono" style={{ position: 'absolute', left: 9, top: 9, fontSize: 12, color: C.inkFaint }}>R$</span><input type="number" min="0" autoFocus className="rk-focus rk-mono" style={{ ...inputStyle, width: 120, paddingLeft: 30 }} value={draftPrice} onChange={e => setDraftPrice(e.target.value)} /></div>
-                <Btn size="sm" variant="success" icon={Check} onClick={() => savePrice(g)}>Salvar</Btn><Btn size="sm" variant="ghost" onClick={() => setEditing(null)}>Cancelar</Btn>
-              </div>
-            ) : (
-              <div style={{ textAlign: 'right' }}><div className="rk-body" style={{ fontSize: 10.5, fontWeight: 600, color: C.inkFaint, textTransform: 'uppercase' }}>Valor negociado</div><div className="rk-mono" style={{ fontSize: 14, fontWeight: 650, color: C.ink }}>{fmtMoney(g.currentPrice)}/mês</div><button onClick={() => startEditPrice(g)} className="rk-body" style={{ background: 'none', border: 'none', color: C.primary, fontSize: 11, fontWeight: 600, cursor: 'pointer', padding: 0, marginTop: 2 }}>alterar</button></div>
-            )}
-            {editing?.gid === g.gid && editing.field === 'date' ? (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <input type="date" autoFocus className="rk-focus rk-mono" style={{ ...inputStyle, width: 150 }} min={g.rep.date} value={draftDate} onChange={e => setDraftDate(e.target.value)} />
-                <Btn size="sm" variant="success" icon={Check} onClick={() => saveDate(g)}>Salvar</Btn><Btn size="sm" variant="ghost" onClick={() => setEditing(null)}>Cancelar</Btn>
-              </div>
-            ) : (
-              <div style={{ textAlign: 'right' }}><div className="rk-body" style={{ fontSize: 10.5, fontWeight: 600, color: C.inkFaint, textTransform: 'uppercase' }}>Repete até</div><div className="rk-mono" style={{ fontSize: 14, fontWeight: 650, color: C.ink }}>{fmtBR(g.endDate)}</div><button onClick={() => startEditDate(g)} className="rk-body" style={{ background: 'none', border: 'none', color: C.primary, fontSize: 11, fontWeight: 600, cursor: 'pointer', padding: 0, marginTop: 2 }}>alterar</button></div>
-            )}
-          </div>
-        </Card>
+        </div>
       ))}
     </div>
   );
@@ -1319,6 +1506,7 @@ export default function App() {
 
   const managerTabs = [
     { key: 'nova-reserva', label: 'Nova Reserva', icon: Plus },
+    { key: 'calendario', label: 'Calendário', icon: CalendarIcon },
     { key: 'solicitacoes', label: 'Solicitações', icon: Clock, badge: pendingCount },
     { key: 'usuarios', label: 'Usuários', icon: Users, badge: pendingUsers },
     { key: 'horarios', label: 'Horários', icon: Clock },
@@ -1339,6 +1527,7 @@ export default function App() {
       {profile.role === 'manager' && (
         <>
           {tab === 'nova-reserva' && <ManagerBookTab data={data} profile={profile} showToast={showToast} />}
+          {tab === 'calendario' && <AgendaCalendarTab data={data} />}
           {tab === 'solicitacoes' && <RequestsTab data={data} showToast={showToast} />}
           {tab === 'usuarios' && <UsersTab data={data} showToast={showToast} />}
           {tab === 'horarios' && <ShiftHoursTab data={data} showToast={showToast} />}
