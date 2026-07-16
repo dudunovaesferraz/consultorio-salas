@@ -161,28 +161,42 @@ function reconcileRecurringGroup({ allBookings, room, groupId, startDate, slotTy
   let added = 0, revived = 0, cancelled = 0;
   const availabilityLike = () => updated.map(b => ({ roomId: b.roomId, date: b.date, slotType: b.slotType, status: b.status }));
 
+  // The negotiated value is a MONTHLY charge, not a per-occurrence one: only the first weekly
+  // occurrence that falls in a given calendar month carries the price, the rest of that month's
+  // occurrences are R$0 (they're still real reservations, just already covered by that charge).
+  const monthHasCharge = new Set(
+    updated.filter(b => b.groupId === groupId && b.status === 'confirmada' && b.price > 0).map(b => b.date.slice(0, 7))
+  );
+
   expected.forEach(date => {
+    const monthKey = date.slice(0, 7);
     const existing = updated.find(b => b.groupId === groupId && b.date === date);
     if (existing) {
       if (existing.status !== 'confirmada') {
         const others = availabilityLike().filter((_, i) => updated[i].id !== existing.id);
         const avail = getAvailableSlotKeys(room, date, others);
         if (avail.includes(slotType) || date === startDate) {
-          updated = updated.map(b => b.id === existing.id ? { ...b, status: 'confirmada', recurrenceEndDate: newEndDate } : b);
+          const chargeThis = !monthHasCharge.has(monthKey);
+          updated = updated.map(b => b.id === existing.id ? { ...b, status: 'confirmada', recurrenceEndDate: newEndDate, price: chargeThis ? price : 0 } : b);
           revived++;
+          if (chargeThis) monthHasCharge.add(monthKey);
         }
       } else {
+        // Already confirmed: keep its existing price (don't rewrite history), just sync end date.
         updated = updated.map(b => b.id === existing.id ? { ...b, recurrenceEndDate: newEndDate } : b);
+        if (existing.price > 0) monthHasCharge.add(monthKey);
       }
     } else {
       const avail = getAvailableSlotKeys(room, date, availabilityLike());
       if (avail.includes(slotType)) {
+        const chargeThis = !monthHasCharge.has(monthKey);
         updated.push({
           id: uid(), userId, userName, roomId, roomName, date, slotType, slotLabel,
-          recurrence: 'fixa_mensal', price, status: 'confirmada', paymentStatus: 'pendente', paidAt: null,
+          recurrence: 'fixa_mensal', price: chargeThis ? price : 0, status: 'confirmada', paymentStatus: 'pendente', paidAt: null,
           requestedAt, confirmedAt: Date.now(), groupId, recurrenceEndDate: newEndDate,
         });
         added++;
+        if (chargeThis) monthHasCharge.add(monthKey);
       }
     }
   });
@@ -693,7 +707,9 @@ function MyBookingsTab({ data, profile, showToast }) {
             <div className="rk-body" style={{ fontSize: 12, color: C.inkMuted, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
               <span className="rk-mono">{fmtBR(b.date)}</span>
               {b.recurrence === 'fixa_mensal' && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}><Repeat size={10} />fixo mensal até <span className="rk-mono">{fmtBR(b.recurrenceEndDate)}</span></span>}
-              <span className="rk-mono">{fmtMoney(b.price)}</span>
+              {b.recurrence === 'fixa_mensal' && b.price === 0
+                ? <span className="rk-mono" style={{ color: C.inkFaint }}>incluso na mensalidade</span>
+                : <span className="rk-mono">{fmtMoney(b.price)}</span>}
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -711,7 +727,7 @@ function MyBookingsTab({ data, profile, showToast }) {
 function MyFinanceTab({ data, profile }) {
   const mine = (data.bookings || []).filter(b => b.userId === profile.id);
   const fin = financeForBookings(mine);
-  const pending = mine.filter(b => b.status === 'confirmada' && b.paymentStatus !== 'pago').sort((a, b) => a.date < b.date ? -1 : 1);
+  const pending = mine.filter(b => b.status === 'confirmada' && b.paymentStatus !== 'pago' && b.price > 0).sort((a, b) => a.date < b.date ? -1 : 1);
   return (
     <div className="rk-fade">
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 20 }}>
@@ -854,7 +870,7 @@ function ManagerBookTab({ data, profile, showToast }) {
                 })}
               </div>
             </div>
-            {slotType && <Field label="Preço desta reserva (editável)"><div style={{ position: 'relative' }}><span className="rk-mono" style={{ position: 'absolute', left: 11, top: 9, fontSize: 13, color: C.inkFaint }}>R$</span><input type="number" min="0" className="rk-focus rk-mono" style={{ ...inputStyle, paddingLeft: 34 }} value={price} onChange={e => setPrice(e.target.value)} /></div></Field>}
+            {slotType && <Field label={recurrence === 'fixa_mensal' ? 'Valor mensal (editável)' : 'Preço desta reserva (editável)'}><div style={{ position: 'relative' }}><span className="rk-mono" style={{ position: 'absolute', left: 11, top: 9, fontSize: 13, color: C.inkFaint }}>R$</span><input type="number" min="0" className="rk-focus rk-mono" style={{ ...inputStyle, paddingLeft: 34 }} value={price} onChange={e => setPrice(e.target.value)} /></div></Field>}
             <div style={{ marginBottom: 18 }}>
               <div className="rk-body" style={{ fontSize: 12.5, fontWeight: 600, color: C.inkMuted, marginBottom: 8 }}>Recorrência</div>
               <div style={{ display: 'flex', gap: 8 }}>
@@ -886,7 +902,7 @@ function RequestsTab({ data, showToast }) {
       const endDate = booking.recurrenceEndDate || addDays(booking.date, 90);
       const { updated: reconciled, added } = reconcileRecurringGroup({ allBookings: updated, room, groupId: booking.id, startDate: booking.date, slotType: booking.slotType, slotLabel: booking.slotLabel, newEndDate: endDate, userId: booking.userId, userName: booking.userName, roomId: booking.roomId, roomName: booking.roomName, price: finalPrice, requestedAt: booking.requestedAt });
       updated = reconciled;
-      showToast(`Reserva confirmada a ${fmtMoney(finalPrice)}/semana + ${added} ocorrências geradas até ${fmtBR(endDate)}.`, 'ok');
+      showToast(`Reserva confirmada a ${fmtMoney(finalPrice)}/mês + ${added} ocorrências geradas até ${fmtBR(endDate)}.`, 'ok');
     } else showToast('Reserva confirmada.', 'ok');
     await data.syncBookings(updated);
   };
@@ -907,7 +923,7 @@ function RequestsTab({ data, showToast }) {
             <div className="rk-body" style={{ fontSize: 11, color: C.inkFaint, marginTop: 3 }}>solicitado em {fmtDateTime(b.requestedAt)}</div>
             {b.recurrence === 'fixa_mensal' && (
               <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span className="rk-body" style={{ fontSize: 11.5, color: C.inkMuted }}>Valor negociado (por semana):</span>
+                <span className="rk-body" style={{ fontSize: 11.5, color: C.inkMuted }}>Valor negociado (mensal):</span>
                 <div style={{ position: 'relative' }}><span className="rk-mono" style={{ position: 'absolute', left: 9, top: 6, fontSize: 12, color: C.inkFaint }}>R$</span><input type="number" min="0" className="rk-focus rk-mono" style={{ ...inputStyle, width: 110, padding: '5px 8px 5px 30px', fontSize: 12.5 }} value={priceFor(b)} onChange={e => setNegPrices({ ...negPrices, [b.id]: e.target.value })} /></div>
               </div>
             )}
@@ -1109,7 +1125,9 @@ function RecurringTab({ data, showToast }) {
     const active = items.filter(b => b.status === 'confirmada').sort((a, b) => a.date < b.date ? -1 : 1);
     const past = active.filter(b => b.date < today).length;
     const future = active.filter(b => b.date >= today);
-    const currentPrice = (future[0] || active[active.length - 1] || rep).price;
+    const charges = active.filter(b => b.price > 0);
+    const futureCharges = charges.filter(b => b.date >= today);
+    const currentPrice = (futureCharges[0] || charges[charges.length - 1] || rep).price;
     return { gid, rep, active, past, future: future.length, endDate: rep.recurrenceEndDate, currentPrice };
   }).sort((a, b) => a.rep.userName.localeCompare(b.rep.userName));
 
@@ -1125,14 +1143,26 @@ function RecurringTab({ data, showToast }) {
   };
   const savePrice = async (g) => {
     const newPrice = Number(draftPrice) || 0;
-    const updated = all.map(b => (b.groupId === g.gid && b.status === 'confirmada' && b.date >= today) ? { ...b, price: newPrice } : b);
+    const groupConfirmed = all.filter(b => b.groupId === g.gid && b.status === 'confirmada').sort((a, b) => a.date < b.date ? -1 : 1);
+    const seenMonths = new Set();
+    const isFirstOfMonth = new Map();
+    groupConfirmed.forEach(b => {
+      const mk = b.date.slice(0, 7);
+      const first = !seenMonths.has(mk);
+      if (first) seenMonths.add(mk);
+      isFirstOfMonth.set(b.id, first);
+    });
+    const updated = all.map(b => {
+      if (b.groupId !== g.gid || b.status !== 'confirmada' || b.date < today) return b;
+      return { ...b, price: isFirstOfMonth.get(b.id) ? newPrice : 0 };
+    });
     await data.syncBookings(updated); setEditing(null);
-    showToast(`Novo valor (${fmtMoney(newPrice)}/semana) aplicado às próximas cobranças.`, 'ok');
+    showToast(`Novo valor mensal (${fmtMoney(newPrice)}) aplicado a partir deste mês.`, 'ok');
   };
 
   return (
     <div className="rk-fade" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      <div className="rk-body" style={{ fontSize: 12.5, color: C.inkMuted, marginBottom: 4, lineHeight: 1.5 }}>Cada locação fixa mensal se repete toda semana (no mesmo dia e horário) até a data final definida. Você pode alterar a data ou o valor a qualquer momento.</div>
+      <div className="rk-body" style={{ fontSize: 12.5, color: C.inkMuted, marginBottom: 4, lineHeight: 1.5 }}>Cada locação fixa mensal reserva a sala toda semana, mas o valor negociado é cobrado uma vez por mês — as demais semanas do mês não geram cobrança adicional. Mudanças de valor valem a partir do mês atual, sem afetar cobranças já ocorridas.</div>
       {groups.map(g => (
         <Card key={g.gid} style={{ padding: '15px 18px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
           <div>
@@ -1147,7 +1177,7 @@ function RecurringTab({ data, showToast }) {
                 <Btn size="sm" variant="success" icon={Check} onClick={() => savePrice(g)}>Salvar</Btn><Btn size="sm" variant="ghost" onClick={() => setEditing(null)}>Cancelar</Btn>
               </div>
             ) : (
-              <div style={{ textAlign: 'right' }}><div className="rk-body" style={{ fontSize: 10.5, fontWeight: 600, color: C.inkFaint, textTransform: 'uppercase' }}>Valor negociado</div><div className="rk-mono" style={{ fontSize: 14, fontWeight: 650, color: C.ink }}>{fmtMoney(g.currentPrice)}/sem</div><button onClick={() => startEditPrice(g)} className="rk-body" style={{ background: 'none', border: 'none', color: C.primary, fontSize: 11, fontWeight: 600, cursor: 'pointer', padding: 0, marginTop: 2 }}>alterar</button></div>
+              <div style={{ textAlign: 'right' }}><div className="rk-body" style={{ fontSize: 10.5, fontWeight: 600, color: C.inkFaint, textTransform: 'uppercase' }}>Valor negociado</div><div className="rk-mono" style={{ fontSize: 14, fontWeight: 650, color: C.ink }}>{fmtMoney(g.currentPrice)}/mês</div><button onClick={() => startEditPrice(g)} className="rk-body" style={{ background: 'none', border: 'none', color: C.primary, fontSize: 11, fontWeight: 600, cursor: 'pointer', padding: 0, marginTop: 2 }}>alterar</button></div>
             )}
             {editing?.gid === g.gid && editing.field === 'date' ? (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -1169,7 +1199,7 @@ function FinanceTab({ data, showToast }) {
   const [filter, setFilter] = useState('todos');
   const all = (data.bookings || []).filter(b => b.status === 'confirmada');
   const totals = financeForBookings(all);
-  const filtered = all.filter(b => filter === 'todos' || paymentBadgeStatus(b) === filter).sort((a, b) => a.date < b.date ? 1 : -1);
+  const filtered = all.filter(b => b.price > 0 && (filter === 'todos' || paymentBadgeStatus(b) === filter)).sort((a, b) => a.date < b.date ? 1 : -1);
   const togglePaid = async (b) => { const updated = (data.bookings || []).map(x => x.id === b.id ? { ...x, paymentStatus: x.paymentStatus === 'pago' ? 'pendente' : 'pago', paidAt: x.paymentStatus === 'pago' ? null : Date.now() } : x); await data.syncBookings(updated); showToast(b.paymentStatus === 'pago' ? 'Marcado como não pago.' : 'Pagamento registrado.', 'ok'); };
   return (
     <div className="rk-fade">
