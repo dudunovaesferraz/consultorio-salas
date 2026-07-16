@@ -1294,8 +1294,9 @@ function RecurringTab({ data, showToast }) {
     const charges = active.filter(b => b.price > 0);
     const futureCharges = charges.filter(b => b.date >= today);
     const currentPrice = (futureCharges[0] || charges[charges.length - 1] || rep).price;
+    const hasFutureCharge = futureCharges.length > 0;
     const dueDay = rep.dueDay || parseDate(rep.date).getDate();
-    return { gid, rep, active, past, future: future.length, endDate: rep.recurrenceEndDate, currentPrice, dueDay };
+    return { gid, rep, active, past, future: future.length, endDate: rep.recurrenceEndDate, currentPrice, hasFutureCharge, dueDay };
   });
 
   const byUser = {};
@@ -1307,7 +1308,7 @@ function RecurringTab({ data, showToast }) {
   const userBlocks = Object.values(byUser).sort((a, b) => a.userName.localeCompare(b.userName)).map(u => ({
     ...u,
     groups: u.groups.sort((a, b) => weekdayKey(a.rep.date).localeCompare(weekdayKey(b.rep.date))),
-    total: u.groups.reduce((sum, g) => sum + g.currentPrice, 0),
+    total: u.groups.reduce((sum, g) => sum + (g.hasFutureCharge ? g.currentPrice : 0), 0),
   }));
 
   const startEditDate = (g) => { setEditing({ gid: g.gid, field: 'date' }); setDraftDate(g.endDate || todayStr()); };
@@ -1351,18 +1352,17 @@ function RecurringTab({ data, showToast }) {
 
   const saveTotal = async (u) => {
     const newTotal = Number(draftTotal) || 0;
+    const carrier = u.groups[0]; // whichever fixed slot appears first (by weekday) carries the single combined charge
     let updated = all;
-    let allocated = 0;
-    u.groups.forEach((g, i) => {
-      let amt;
-      if (i === u.groups.length - 1) amt = newTotal - allocated;
-      else amt = u.total > 0 ? Math.round(newTotal * (g.currentPrice / u.total)) : Math.round(newTotal / u.groups.length);
-      allocated += amt;
-      updated = applyMonthlyPriceToGroup(updated, g.gid, amt, today);
+    // Zero out every group's future charges first...
+    u.groups.forEach(g => {
+      updated = updated.map(b => (b.groupId === g.gid && b.status === 'confirmada' && b.date >= today) ? { ...b, price: 0 } : b);
     });
+    // ...then place the whole combined amount on just the carrier's monthly charge occurrence.
+    updated = applyMonthlyPriceToGroup(updated, carrier.gid, newTotal, today);
     await data.syncBookings(updated);
     setEditing(null);
-    showToast(`Total mensal de ${u.userName} atualizado para ${fmtMoney(newTotal)}, distribuído entre as ${u.groups.length} reservas fixas.`, 'ok');
+    showToast(`Total mensal de ${u.userName} consolidado em uma única cobrança de ${fmtMoney(newTotal)} (via ${carrier.rep.roomName} · ${carrier.rep.slotLabel}).`, 'ok');
   };
 
   const cancelWholeGroup = async (g) => {
@@ -1435,7 +1435,11 @@ function RecurringTab({ data, showToast }) {
                   ) : (
                     <div style={{ textAlign: 'right' }}>
                       <div className="rk-body" style={{ fontSize: 10.5, fontWeight: 600, color: C.inkFaint, textTransform: 'uppercase' }}>Valor negociado</div>
-                      <div className="rk-mono" style={{ fontSize: 14, fontWeight: 650, color: C.ink }}>{fmtMoney(g.currentPrice)}/mês</div>
+                      {g.hasFutureCharge || u.groups.length === 1 ? (
+                        <div className="rk-mono" style={{ fontSize: 14, fontWeight: 650, color: C.ink }}>{fmtMoney(g.currentPrice)}/mês</div>
+                      ) : (
+                        <div className="rk-body" style={{ fontSize: 12.5, fontStyle: 'italic', color: C.inkFaint }}>incluso no total</div>
+                      )}
                       <button onClick={() => startEditPrice(g)} className="rk-body" style={{ background: 'none', border: 'none', color: C.primary, fontSize: 11, fontWeight: 600, cursor: 'pointer', padding: 0, marginTop: 2 }}>alterar</button>
                     </div>
                   )}
