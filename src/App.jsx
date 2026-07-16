@@ -99,6 +99,20 @@ function deriveFullShifts(hours) {
 function timeRangeLabel(hours, slotKey) { const h = hours?.[slotKey]; return h ? `${h.start}–${h.end}` : ''; }
 function fullSlotLabel(hours, slotKey) { const st = SLOT_BY_KEY[slotKey]; const range = timeRangeLabel(hours, slotKey); return range ? `${st.label} (${range})` : st.label; }
 
+/* ============================== BOOKING CANCEL HELPER ============================== */
+// Cancels a confirmed booking. If it was the charge-bearing occurrence of a "fixo mensal" plan
+// (price > 0), the month's charge is transferred to another confirmed occurrence still in that
+// same calendar month, if one exists — so cancelling a single week never silently waives billing.
+function cancelBookingUpdate(booking, allBookings) {
+  let updated = allBookings.map(b => b.id === booking.id ? { ...b, status: 'cancelada' } : b);
+  if (booking.recurrence === 'fixa_mensal' && booking.price > 0) {
+    const monthKey = booking.date.slice(0, 7);
+    const sibling = updated.find(b => b.groupId === booking.groupId && b.id !== booking.id && b.status === 'confirmada' && b.date.slice(0, 7) === monthKey);
+    if (sibling) updated = updated.map(b => b.id === sibling.id ? { ...b, price: booking.price } : b);
+  }
+  return updated;
+}
+
 /* ============================== FINANCE CALC ============================== */
 function financeForBookings(list) {
   const today = todayStr();
@@ -941,6 +955,11 @@ function UsersTab({ data, showToast }) {
   const [expanded, setExpanded] = useState(null);
 
   const setStatus = async (id, status) => { await data.saveProfiles(users.map(u => u.id === id ? { ...u, status } : u)); showToast(status === 'ativo' ? 'Usuário habilitado.' : 'Usuário desabilitado.', 'ok'); };
+  const cancelBooking = async (b) => {
+    const updated = cancelBookingUpdate(b, data.bookings || []);
+    await data.syncBookings(updated);
+    showToast(`Reserva de ${fmtBR(b.date)} cancelada.`, 'ok');
+  };
   const sendReset = async (u) => {
     const { error } = await supabase.auth.resetPasswordForEmail(u.email, { redirectTo: window.location.origin });
     if (error) showToast(error.message, 'err');
@@ -980,9 +999,13 @@ function UsersTab({ data, showToast }) {
               <div style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${C.borderSoft}`, display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {bookings.length === 0 && <div className="rk-body" style={{ fontSize: 12.5, color: C.inkFaint }}>Sem reservas.</div>}
                 {bookings.sort((a, b) => b.date < a.date ? -1 : 1).map(b => (
-                  <div key={b.id} className="rk-body" style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, color: C.inkMuted, padding: '4px 0' }}>
+                  <div key={b.id} className="rk-body" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12.5, color: C.inkMuted, padding: '4px 0' }}>
                     <span>{b.roomName} · {b.slotLabel} · <span className="rk-mono">{fmtBR(b.date)}</span></span>
-                    <span style={{ display: 'flex', gap: 6 }}><Badge tone={b.status}>{b.status}</Badge>{paymentBadgeStatus(b) && <Badge tone={paymentBadgeStatus(b)}>{paymentBadgeStatus(b)}</Badge>}</span>
+                    <span style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                      <Badge tone={b.status}>{b.status}</Badge>
+                      {paymentBadgeStatus(b) && <Badge tone={paymentBadgeStatus(b)}>{paymentBadgeStatus(b)}</Badge>}
+                      {b.status === 'confirmada' && b.date >= todayStr() && <Btn size="sm" variant="danger" icon={X} onClick={() => cancelBooking(b)}>Cancelar</Btn>}
+                    </span>
                   </div>
                 ))}
               </div>
@@ -1201,6 +1224,7 @@ function FinanceTab({ data, showToast }) {
   const totals = financeForBookings(all);
   const filtered = all.filter(b => b.price > 0 && (filter === 'todos' || paymentBadgeStatus(b) === filter)).sort((a, b) => a.date < b.date ? 1 : -1);
   const togglePaid = async (b) => { const updated = (data.bookings || []).map(x => x.id === b.id ? { ...x, paymentStatus: x.paymentStatus === 'pago' ? 'pendente' : 'pago', paidAt: x.paymentStatus === 'pago' ? null : Date.now() } : x); await data.syncBookings(updated); showToast(b.paymentStatus === 'pago' ? 'Marcado como não pago.' : 'Pagamento registrado.', 'ok'); };
+  const cancelBooking = async (b) => { const updated = cancelBookingUpdate(b, data.bookings || []); await data.syncBookings(updated); showToast(`Reserva de ${fmtBR(b.date)} cancelada.`, 'ok'); };
   return (
     <div className="rk-fade">
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 18 }}>
@@ -1219,6 +1243,7 @@ function FinanceTab({ data, showToast }) {
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <span className="rk-mono" style={{ fontWeight: 650, color: C.ink, fontSize: 14 }}>{fmtMoney(b.price)}</span><Badge tone={paymentBadgeStatus(b)}>{paymentBadgeStatus(b)}</Badge>
                 <Btn size="sm" variant={b.paymentStatus === 'pago' ? 'subtle' : 'success'} icon={b.paymentStatus === 'pago' ? X : Check} onClick={() => togglePaid(b)}>{b.paymentStatus === 'pago' ? 'Desmarcar' : 'Recebido'}</Btn>
+                {b.date >= todayStr() && <Btn size="sm" variant="danger" icon={X} onClick={() => cancelBooking(b)}>Cancelar</Btn>}
               </div>
             </Card>
           ))}
