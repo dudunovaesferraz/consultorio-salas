@@ -1136,7 +1136,7 @@ function RoomsTab({ data, showToast }) {
 /* ============================== MANAGER: RECURRING (FIXOS) ============================== */
 function RecurringTab({ data, showToast }) {
   const all = data.bookings || [];
-  const groupIds = [...new Set(all.filter(b => b.recurrence === 'fixa_mensal' && b.groupId).map(b => b.groupId))];
+  const groupIds = [...new Set(all.filter(b => b.recurrence === 'fixa_mensal' && b.groupId && b.status === 'confirmada').map(b => b.groupId))];
   const [editing, setEditing] = useState(null);
   const [draftDate, setDraftDate] = useState(''); const [draftPrice, setDraftPrice] = useState('');
   if (groupIds.length === 0) return <div className="rk-body rk-fade" style={{ color: C.inkFaint, fontSize: 14, padding: '30px 0' }}>Nenhuma locação fixa mensal confirmada ainda.</div>;
