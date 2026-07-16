@@ -1527,7 +1527,18 @@ function FinanceTab({ data, showToast }) {
   const futureSorted = futureAll.slice().sort((a, b) => dueDateFor(a) < dueDateFor(b) ? -1 : 1);
 
   const togglePaid = async (b) => { const updated = (data.bookings || []).map(x => x.id === b.id ? { ...x, paymentStatus: x.paymentStatus === 'pago' ? 'pendente' : 'pago', paidAt: x.paymentStatus === 'pago' ? null : Date.now() } : x); await data.syncBookings(updated); showToast(b.paymentStatus === 'pago' ? 'Marcado como não pago.' : 'Pagamento registrado.', 'ok'); };
-  const cancelBooking = async (b) => { const updated = cancelBookingUpdate(b, data.bookings || []); await data.syncBookings(updated); showToast(`Reserva de ${fmtBR(b.date)} cancelada.`, 'ok'); };
+  const cancelBooking = async (b) => {
+    if (b.recurrence === 'fixa_mensal') {
+      // Waive just this month's charge — the room stays reserved, only the bill goes away.
+      const updated = (data.bookings || []).map(x => x.id === b.id ? { ...x, price: 0 } : x);
+      await data.syncBookings(updated);
+      showToast(`Cobrança de ${fmtBR(dueDateFor(b))} removida — a sala continua reservada, sem cobrança nesse mês.`, 'ok');
+    } else {
+      const updated = cancelBookingUpdate(b, data.bookings || []);
+      await data.syncBookings(updated);
+      showToast(`Reserva de ${fmtBR(b.date)} cancelada.`, 'ok');
+    }
+  };
 
   const row = (b) => (
     <Card key={b.id} style={{ padding: '13px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
@@ -1541,7 +1552,7 @@ function FinanceTab({ data, showToast }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
         <span className="rk-mono" style={{ fontWeight: 650, color: C.ink, fontSize: 14 }}>{fmtMoney(b.price)}</span><Badge tone={paymentBadgeStatus(b)}>{paymentBadgeStatus(b)}</Badge>
         <Btn size="sm" variant={b.paymentStatus === 'pago' ? 'subtle' : 'success'} icon={b.paymentStatus === 'pago' ? X : Check} onClick={() => togglePaid(b)}>{b.paymentStatus === 'pago' ? 'Desmarcar' : 'Recebido'}</Btn>
-        {b.date >= todayStr() && <Btn size="sm" variant="danger" icon={X} onClick={() => cancelBooking(b)}>Cancelar</Btn>}
+        {b.date >= todayStr() && <Btn size="sm" variant="danger" icon={X} onClick={() => cancelBooking(b)}>{b.recurrence === 'fixa_mensal' ? 'Cancelar cobrança' : 'Cancelar'}</Btn>}
       </div>
     </Card>
   );
