@@ -1183,6 +1183,12 @@ function RecurringTab({ data, showToast }) {
     showToast(`Novo valor mensal (${fmtMoney(newPrice)}) aplicado a partir deste mês.`, 'ok');
   };
 
+  const cancelWholeGroup = async (g) => {
+    const updated = all.map(b => (b.groupId === g.gid && b.status === 'confirmada' && b.date >= today) ? { ...b, status: 'cancelada' } : b);
+    await data.syncBookings(updated); setEditing(null);
+    showToast(`Locação de ${g.rep.userName} cancelada — reservas futuras removidas do calendário.`, 'ok');
+  };
+
   return (
     <div className="rk-fade" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       <div className="rk-body" style={{ fontSize: 12.5, color: C.inkMuted, marginBottom: 4, lineHeight: 1.5 }}>Cada locação fixa mensal reserva a sala toda semana, mas o valor negociado é cobrado uma vez por mês — as demais semanas do mês não geram cobrança adicional. Mudanças de valor valem a partir do mês atual, sem afetar cobranças já ocorridas.</div>
@@ -1192,6 +1198,15 @@ function RecurringTab({ data, showToast }) {
             <div className="rk-body" style={{ fontSize: 14.5, fontWeight: 650, color: C.ink }}>{g.rep.userName}</div>
             <div className="rk-body" style={{ fontSize: 12.5, color: C.inkMuted, marginTop: 3, display: 'flex', gap: 8, flexWrap: 'wrap' }}><span>{g.rep.roomName} · {g.rep.slotLabel}</span><span>toda {WK_LABEL[weekdayKey(g.rep.date)]}</span></div>
             <div className="rk-body" style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 4 }}>início <span className="rk-mono">{fmtBR(g.rep.date)}</span> · {g.past} já ocorridas · {g.future} futuras confirmadas</div>
+            {editing?.gid === g.gid && editing.field === 'cancel-confirm' ? (
+              <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <span className="rk-body" style={{ fontSize: 11.5, color: C.danger }}>Cancelar as {g.future} reservas futuras desta locação?</span>
+                <Btn size="sm" variant="danger" icon={X} onClick={() => cancelWholeGroup(g)}>Confirmar cancelamento</Btn>
+                <Btn size="sm" variant="ghost" onClick={() => setEditing(null)}>Voltar</Btn>
+              </div>
+            ) : (
+              <button onClick={() => setEditing({ gid: g.gid, field: 'cancel-confirm' })} className="rk-body" style={{ background: 'none', border: 'none', color: C.danger, fontSize: 11, fontWeight: 600, cursor: 'pointer', padding: 0, marginTop: 8 }}>Cancelar locação</button>
+            )}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 18, flexWrap: 'wrap' }}>
             {editing?.gid === g.gid && editing.field === 'price' ? (
