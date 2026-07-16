@@ -131,13 +131,27 @@ function cancelBookingUpdate(booking, allBookings) {
 }
 
 /* ============================== FINANCE CALC ============================== */
+// For "fixo mensal" bookings, the due date is a chosen day-of-month (dueDay), not the usage date —
+// since the tenant pays a monthly fee, not per weekly occurrence. One-off ("avulsa") bookings are
+// still due on the day of use itself. Clamped to the last day of the month when it doesn't exist
+// (e.g. dueDay=31 in February).
+function computeDueDate(dateStr, dueDay) {
+  const d = parseDate(dateStr);
+  const year = d.getFullYear(), month = d.getMonth();
+  const lastDay = new Date(year, month + 1, 0).getDate();
+  const day = Math.min(Math.max(Number(dueDay) || 1, 1), lastDay);
+  return dstr(new Date(year, month, day));
+}
+function dueDateFor(b) {
+  return (b.recurrence === 'fixa_mensal' && b.dueDay) ? computeDueDate(b.date, b.dueDay) : b.date;
+}
 function financeForBookings(list) {
   const today = todayStr();
   let pago = 0, aberto = 0, vencido = 0;
   list.forEach(b => {
     if (b.status !== 'confirmada') return;
     if (b.paymentStatus === 'pago') pago += b.price;
-    else if (b.date >= today) aberto += b.price;
+    else if (dueDateFor(b) >= today) aberto += b.price;
     else vencido += b.price;
   });
   return { pago, aberto, vencido };
@@ -145,7 +159,7 @@ function financeForBookings(list) {
 function paymentBadgeStatus(b) {
   if (b.status !== 'confirmada') return null;
   if (b.paymentStatus === 'pago') return 'pago';
-  return b.date >= todayStr() ? 'aberto' : 'vencido';
+  return dueDateFor(b) >= todayStr() ? 'aberto' : 'vencido';
 }
 
 /* ============================== DB <-> JS MAPPERS ============================== */
@@ -158,7 +172,7 @@ function bookingFromDb(r) {
     price: Number(r.price), status: r.status, paymentStatus: r.payment_status, paidAt: r.paid_at,
     requestedAt: r.requested_at ? new Date(r.requested_at).getTime() : null,
     confirmedAt: r.confirmed_at ? new Date(r.confirmed_at).getTime() : null,
-    groupId: r.group_id, recurrenceEndDate: r.recurrence_end_date,
+    groupId: r.group_id, recurrenceEndDate: r.recurrence_end_date, dueDay: r.due_day || null,
   };
 }
 function bookingToDb(b) {
@@ -168,7 +182,7 @@ function bookingToDb(b) {
     price: b.price, status: b.status, payment_status: b.paymentStatus, paid_at: b.paidAt,
     requested_at: b.requestedAt ? new Date(b.requestedAt).toISOString() : new Date().toISOString(),
     confirmed_at: b.confirmedAt ? new Date(b.confirmedAt).toISOString() : null,
-    group_id: b.groupId || null, recurrence_end_date: b.recurrenceEndDate || null,
+    group_id: b.groupId || null, recurrence_end_date: b.recurrenceEndDate || null, due_day: b.dueDay || null,
   };
 }
 function profileFromDb(p) {
@@ -183,7 +197,7 @@ function uid() { return crypto.randomUUID(); }
  * ones that now fall after the new end date. Works on an in-memory array; the caller is
  * responsible for diffing the result against the DB (see syncBookings).
  */
-function reconcileRecurringGroup({ allBookings, room, groupId, startDate, slotType, slotLabel, newEndDate, userId, userName, roomId, roomName, price, requestedAt }) {
+function reconcileRecurringGroup({ allBookings, room, groupId, startDate, slotType, slotLabel, newEndDate, userId, userName, roomId, roomName, price, requestedAt, dueDay }) {
   const expected = [];
   let cursor = startDate, guard = 0;
   while (cursor <= newEndDate && guard < 200) { expected.push(cursor); cursor = addDays(cursor, 7); guard++; }
@@ -208,13 +222,13 @@ function reconcileRecurringGroup({ allBookings, room, groupId, startDate, slotTy
         const avail = getAvailableSlotKeys(room, date, others);
         if (avail.includes(slotType) || date === startDate) {
           const chargeThis = !monthHasCharge.has(monthKey);
-          updated = updated.map(b => b.id === existing.id ? { ...b, status: 'confirmada', recurrenceEndDate: newEndDate, price: chargeThis ? price : 0 } : b);
+          updated = updated.map(b => b.id === existing.id ? { ...b, status: 'confirmada', recurrenceEndDate: newEndDate, dueDay: dueDay || b.dueDay, price: chargeThis ? price : 0 } : b);
           revived++;
           if (chargeThis) monthHasCharge.add(monthKey);
         }
       } else {
         // Already confirmed: keep its existing price (don't rewrite history), just sync end date.
-        updated = updated.map(b => b.id === existing.id ? { ...b, recurrenceEndDate: newEndDate } : b);
+        updated = updated.map(b => b.id === existing.id ? { ...b, recurrenceEndDate: newEndDate, dueDay: dueDay || b.dueDay } : b);
         if (existing.price > 0) monthHasCharge.add(monthKey);
       }
     } else {
@@ -224,7 +238,7 @@ function reconcileRecurringGroup({ allBookings, room, groupId, startDate, slotTy
         updated.push({
           id: uid(), userId, userName, roomId, roomName, date, slotType, slotLabel,
           recurrence: 'fixa_mensal', price: chargeThis ? price : 0, status: 'confirmada', paymentStatus: 'pendente', paidAt: null,
-          requestedAt, confirmedAt: Date.now(), groupId, recurrenceEndDate: newEndDate,
+          requestedAt, confirmedAt: Date.now(), groupId, recurrenceEndDate: newEndDate, dueDay: dueDay || null,
         });
         added++;
         if (chargeThis) monthHasCharge.add(monthKey);
@@ -236,7 +250,7 @@ function reconcileRecurringGroup({ allBookings, room, groupId, startDate, slotTy
     if (b.groupId === groupId && b.status === 'confirmada' && b.date > newEndDate) { cancelled++; return { ...b, status: 'cancelada' }; }
     return b;
   });
-  updated = updated.map(b => (b.groupId === groupId ? { ...b, recurrenceEndDate: newEndDate } : b));
+  updated = updated.map(b => (b.groupId === groupId ? { ...b, recurrenceEndDate: newEndDate, dueDay: dueDay || b.dueDay } : b));
 
   return { updated, added, revived, cancelled };
 }
@@ -756,6 +770,7 @@ function BookTab({ data, profile, showToast }) {
       date: selectedDate, slotType, slotLabel: fullSlotLabel(data.shiftHours, slotType), recurrence, price: room.prices[st.priceKey],
       status: 'pendente', paymentStatus: 'pendente', paidAt: null, requestedAt: Date.now(), confirmedAt: null, groupId: null,
       recurrenceEndDate: recurrence === 'fixa_mensal' ? recurrenceEndDate : null,
+      dueDay: recurrence === 'fixa_mensal' ? parseDate(selectedDate).getDate() : null,
     };
     await data.syncBookings([...(data.bookings || []), booking]);
     setBusy(false); setSelectedDate(null); setSlotType(null); setRecurrence('avulsa'); setRecurrenceEndDate('');
@@ -915,10 +930,11 @@ function ManagerBookTab({ data, profile, showToast }) {
   const [price, setPrice] = useState('');
   const [recurrence, setRecurrence] = useState('avulsa');
   const [recurrenceEndDate, setRecurrenceEndDate] = useState('');
+  const [dueDay, setDueDay] = useState('');
   const [busy, setBusy] = useState(false);
 
   useEffect(() => { setSelectedDate(null); setSlotType(null); }, [roomId]);
-  useEffect(() => { if (selectedDate) setRecurrenceEndDate(addDays(selectedDate, 90)); }, [selectedDate]);
+  useEffect(() => { if (selectedDate) { setRecurrenceEndDate(addDays(selectedDate, 90)); setDueDay(String(parseDate(selectedDate).getDate())); } }, [selectedDate]);
   useEffect(() => { if (room && slotType) setPrice(String(room.prices[SLOT_BY_KEY[slotType].priceKey])); }, [slotType, roomId]);
 
   const availableForDate = (room && selectedDate) ? getAvailableSlotKeys(room, selectedDate, data.availabilityRows || []) : [];
@@ -932,11 +948,13 @@ function ManagerBookTab({ data, profile, showToast }) {
     setBusy(true);
     const finalPrice = Number(price) || 0;
     const now = Date.now();
+    const finalDueDay = recurrence === 'fixa_mensal' ? (Number(dueDay) || parseDate(selectedDate).getDate()) : null;
     const baseBooking = {
       id: uid(), userId: targetUser.id, userName: targetUser.name, roomId: room.id, roomName: room.name,
       date: selectedDate, slotType, slotLabel: fullSlotLabel(data.shiftHours, slotType), recurrence, price: finalPrice,
       status: 'confirmada', paymentStatus: 'pendente', paidAt: null, requestedAt: now, confirmedAt: now,
       groupId: recurrence === 'fixa_mensal' ? undefined : null, recurrenceEndDate: recurrence === 'fixa_mensal' ? recurrenceEndDate : null,
+      dueDay: finalDueDay,
     };
     if (recurrence === 'fixa_mensal') baseBooking.groupId = baseBooking.id;
     let updated = [...(data.bookings || []), baseBooking];
@@ -944,12 +962,12 @@ function ManagerBookTab({ data, profile, showToast }) {
     if (recurrence === 'fixa_mensal') {
       const { updated: reconciled, added } = reconcileRecurringGroup({
         allBookings: updated, room, groupId: baseBooking.id, startDate: baseBooking.date, slotType, slotLabel: baseBooking.slotLabel,
-        newEndDate: recurrenceEndDate, userId: targetUser.id, userName: targetUser.name, roomId: room.id, roomName: room.name, price: finalPrice, requestedAt: now,
+        newEndDate: recurrenceEndDate, userId: targetUser.id, userName: targetUser.name, roomId: room.id, roomName: room.name, price: finalPrice, requestedAt: now, dueDay: finalDueDay,
       });
       updated = reconciled; addedCount = added;
     }
     await data.syncBookings(updated);
-    setBusy(false); setSelectedDate(null); setSlotType(null); setRecurrence('avulsa'); setRecurrenceEndDate('');
+    setBusy(false); setSelectedDate(null); setSlotType(null); setRecurrence('avulsa'); setRecurrenceEndDate(''); setDueDay('');
     showToast(`Reserva criada e confirmada para ${targetUser.name}${addedCount ? ` (+ ${addedCount} ocorrências futuras)` : ''}.`, 'ok');
   };
 
@@ -998,7 +1016,12 @@ function ManagerBookTab({ data, profile, showToast }) {
                   <button key={o.v} onClick={() => setRecurrence(o.v)} className="rk-btn rk-focus" style={{ flex: 1, padding: '8px 10px', borderRadius: 8, fontSize: 12.5, fontWeight: 600, cursor: 'pointer', border: `1.5px solid ${recurrence === o.v ? C.primary : C.border}`, background: recurrence === o.v ? C.primaryLight : C.surface, color: recurrence === o.v ? C.primaryDark : C.inkMuted }}>{o.l}</button>
                 ))}
               </div>
-              {recurrence === 'fixa_mensal' && <div style={{ marginTop: 10 }}><Field label="Repetir até"><input type="date" className="rk-focus rk-mono" style={inputStyle} value={recurrenceEndDate} min={minEndDate} max={maxEndDate} onChange={e => setRecurrenceEndDate(e.target.value)} /></Field></div>}
+              {recurrence === 'fixa_mensal' && (
+                <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                  <Field label="Repetir até"><input type="date" className="rk-focus rk-mono" style={inputStyle} value={recurrenceEndDate} min={minEndDate} max={maxEndDate} onChange={e => setRecurrenceEndDate(e.target.value)} /></Field>
+                  <Field label="Dia de vencimento"><input type="number" min="1" max="31" className="rk-focus rk-mono" style={inputStyle} value={dueDay} onChange={e => setDueDay(e.target.value)} /></Field>
+                </div>
+              )}
             </div>
             <Btn onClick={submit} disabled={!slotType || busy} style={{ width: '100%', justifyContent: 'center' }}>{busy ? 'Criando...' : 'Criar reserva confirmada'}</Btn>
           </>
@@ -1012,17 +1035,20 @@ function ManagerBookTab({ data, profile, showToast }) {
 function RequestsTab({ data, showToast }) {
   const pending = (data.bookings || []).filter(b => b.status === 'pendente').sort((a, b) => a.requestedAt - b.requestedAt);
   const [negPrices, setNegPrices] = useState({});
+  const [dueDays, setDueDays] = useState({});
   const priceFor = (b) => (negPrices[b.id] !== undefined ? negPrices[b.id] : b.price);
+  const dueDayFor = (b) => (dueDays[b.id] !== undefined ? dueDays[b.id] : (b.dueDay || parseDate(b.date).getDate()));
 
   const confirm = async (booking) => {
     const finalPrice = Number(priceFor(booking)) || 0;
-    let updated = (data.bookings || []).map(b => b.id === booking.id ? { ...b, status: 'confirmada', confirmedAt: Date.now(), price: finalPrice, groupId: booking.recurrence === 'fixa_mensal' ? booking.id : null } : b);
+    const finalDueDay = booking.recurrence === 'fixa_mensal' ? (Number(dueDayFor(booking)) || parseDate(booking.date).getDate()) : null;
+    let updated = (data.bookings || []).map(b => b.id === booking.id ? { ...b, status: 'confirmada', confirmedAt: Date.now(), price: finalPrice, dueDay: finalDueDay, groupId: booking.recurrence === 'fixa_mensal' ? booking.id : null } : b);
     if (booking.recurrence === 'fixa_mensal') {
       const room = (data.rooms || []).find(r => r.id === booking.roomId);
       const endDate = booking.recurrenceEndDate || addDays(booking.date, 90);
-      const { updated: reconciled, added } = reconcileRecurringGroup({ allBookings: updated, room, groupId: booking.id, startDate: booking.date, slotType: booking.slotType, slotLabel: booking.slotLabel, newEndDate: endDate, userId: booking.userId, userName: booking.userName, roomId: booking.roomId, roomName: booking.roomName, price: finalPrice, requestedAt: booking.requestedAt });
+      const { updated: reconciled, added } = reconcileRecurringGroup({ allBookings: updated, room, groupId: booking.id, startDate: booking.date, slotType: booking.slotType, slotLabel: booking.slotLabel, newEndDate: endDate, userId: booking.userId, userName: booking.userName, roomId: booking.roomId, roomName: booking.roomName, price: finalPrice, requestedAt: booking.requestedAt, dueDay: finalDueDay });
       updated = reconciled;
-      showToast(`Reserva confirmada a ${fmtMoney(finalPrice)}/mês + ${added} ocorrências geradas até ${fmtBR(endDate)}.`, 'ok');
+      showToast(`Reserva confirmada a ${fmtMoney(finalPrice)}/mês (vencimento todo dia ${finalDueDay}) + ${added} ocorrências geradas até ${fmtBR(endDate)}.`, 'ok');
     } else showToast('Reserva confirmada.', 'ok');
     await data.syncBookings(updated);
   };
@@ -1042,9 +1068,15 @@ function RequestsTab({ data, showToast }) {
             </div>
             <div className="rk-body" style={{ fontSize: 11, color: C.inkFaint, marginTop: 3 }}>solicitado em {fmtDateTime(b.requestedAt)}</div>
             {b.recurrence === 'fixa_mensal' && (
-              <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span className="rk-body" style={{ fontSize: 11.5, color: C.inkMuted }}>Valor negociado (mensal):</span>
-                <div style={{ position: 'relative' }}><span className="rk-mono" style={{ position: 'absolute', left: 9, top: 6, fontSize: 12, color: C.inkFaint }}>R$</span><input type="number" min="0" className="rk-focus rk-mono" style={{ ...inputStyle, width: 110, padding: '5px 8px 5px 30px', fontSize: 12.5 }} value={priceFor(b)} onChange={e => setNegPrices({ ...negPrices, [b.id]: e.target.value })} /></div>
+              <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span className="rk-body" style={{ fontSize: 11.5, color: C.inkMuted }}>Valor negociado (mensal):</span>
+                  <div style={{ position: 'relative' }}><span className="rk-mono" style={{ position: 'absolute', left: 9, top: 6, fontSize: 12, color: C.inkFaint }}>R$</span><input type="number" min="0" className="rk-focus rk-mono" style={{ ...inputStyle, width: 110, padding: '5px 8px 5px 30px', fontSize: 12.5 }} value={priceFor(b)} onChange={e => setNegPrices({ ...negPrices, [b.id]: e.target.value })} /></div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span className="rk-body" style={{ fontSize: 11.5, color: C.inkMuted }}>Dia de vencimento:</span>
+                  <input type="number" min="1" max="31" className="rk-focus rk-mono" style={{ ...inputStyle, width: 60, padding: '5px 8px', fontSize: 12.5 }} value={dueDayFor(b)} onChange={e => setDueDays({ ...dueDays, [b.id]: e.target.value })} />
+                </div>
               </div>
             )}
           </div>
@@ -1247,6 +1279,7 @@ function RecurringTab({ data, showToast }) {
   const [draftDate, setDraftDate] = useState('');
   const [draftPrice, setDraftPrice] = useState('');
   const [draftTotal, setDraftTotal] = useState('');
+  const [draftDueDay, setDraftDueDay] = useState('');
 
   if (groupIds.length === 0) return <div className="rk-body rk-fade" style={{ color: C.inkFaint, fontSize: 14, padding: '30px 0' }}>Nenhuma locação fixa mensal confirmada ainda.</div>;
 
@@ -1261,7 +1294,8 @@ function RecurringTab({ data, showToast }) {
     const charges = active.filter(b => b.price > 0);
     const futureCharges = charges.filter(b => b.date >= today);
     const currentPrice = (futureCharges[0] || charges[charges.length - 1] || rep).price;
-    return { gid, rep, active, past, future: future.length, endDate: rep.recurrenceEndDate, currentPrice };
+    const dueDay = rep.dueDay || parseDate(rep.date).getDate();
+    return { gid, rep, active, past, future: future.length, endDate: rep.recurrenceEndDate, currentPrice, dueDay };
   });
 
   const byUser = {};
@@ -1279,6 +1313,7 @@ function RecurringTab({ data, showToast }) {
   const startEditDate = (g) => { setEditing({ gid: g.gid, field: 'date' }); setDraftDate(g.endDate || todayStr()); };
   const startEditPrice = (g) => { setEditing({ gid: g.gid, field: 'price' }); setDraftPrice(g.currentPrice); };
   const startEditTotal = (u) => { setEditing({ userId: u.userId, field: 'total' }); setDraftTotal(u.total); };
+  const startEditDueDay = (g) => { setEditing({ gid: g.gid, field: 'dueday' }); setDraftDueDay(g.dueDay); };
 
   const saveDate = async (g) => {
     const room = (data.rooms || []).find(r => r.id === g.rep.roomId);
@@ -1287,7 +1322,7 @@ function RecurringTab({ data, showToast }) {
     const { updated, added, revived, cancelled } = reconcileRecurringGroup({
       allBookings: all, room, groupId: g.gid, startDate: g.rep.date, slotType: g.rep.slotType, slotLabel: g.rep.slotLabel,
       newEndDate: draftDate, userId: g.rep.userId, userName: g.rep.userName, roomId: g.rep.roomId, roomName: g.rep.roomName,
-      price: g.currentPrice, requestedAt: g.rep.requestedAt,
+      price: g.currentPrice, requestedAt: g.rep.requestedAt, dueDay: g.dueDay,
     });
     await data.syncBookings(updated);
     setEditing(null);
@@ -1304,6 +1339,14 @@ function RecurringTab({ data, showToast }) {
     await data.syncBookings(updated);
     setEditing(null);
     showToast(`Novo valor mensal (${fmtMoney(newPrice)}) aplicado a partir deste mês.`, 'ok');
+  };
+
+  const saveDueDay = async (g) => {
+    const newDueDay = Math.min(Math.max(Number(draftDueDay) || 1, 1), 31);
+    const updated = all.map(b => b.groupId === g.gid ? { ...b, dueDay: newDueDay } : b);
+    await data.syncBookings(updated);
+    setEditing(null);
+    showToast(`Vencimento de ${g.rep.userName} alterado para todo dia ${newDueDay}.`, 'ok');
   };
 
   const saveTotal = async (u) => {
@@ -1394,6 +1437,20 @@ function RecurringTab({ data, showToast }) {
                       <div className="rk-body" style={{ fontSize: 10.5, fontWeight: 600, color: C.inkFaint, textTransform: 'uppercase' }}>Valor negociado</div>
                       <div className="rk-mono" style={{ fontSize: 14, fontWeight: 650, color: C.ink }}>{fmtMoney(g.currentPrice)}/mês</div>
                       <button onClick={() => startEditPrice(g)} className="rk-body" style={{ background: 'none', border: 'none', color: C.primary, fontSize: 11, fontWeight: 600, cursor: 'pointer', padding: 0, marginTop: 2 }}>alterar</button>
+                    </div>
+                  )}
+                  {editing?.gid === g.gid && editing.field === 'dueday' ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span className="rk-body" style={{ fontSize: 11.5, color: C.inkMuted }}>todo dia</span>
+                      <input type="number" min="1" max="31" autoFocus className="rk-focus rk-mono" style={{ ...inputStyle, width: 70 }} value={draftDueDay} onChange={e => setDraftDueDay(e.target.value)} />
+                      <Btn size="sm" variant="success" icon={Check} onClick={() => saveDueDay(g)}>Salvar</Btn>
+                      <Btn size="sm" variant="ghost" onClick={() => setEditing(null)}>Cancelar</Btn>
+                    </div>
+                  ) : (
+                    <div style={{ textAlign: 'right' }}>
+                      <div className="rk-body" style={{ fontSize: 10.5, fontWeight: 600, color: C.inkFaint, textTransform: 'uppercase' }}>Vencimento</div>
+                      <div className="rk-mono" style={{ fontSize: 14, fontWeight: 650, color: C.ink }}>todo dia {g.dueDay}</div>
+                      <button onClick={() => startEditDueDay(g)} className="rk-body" style={{ background: 'none', border: 'none', color: C.primary, fontSize: 11, fontWeight: 600, cursor: 'pointer', padding: 0, marginTop: 2 }}>alterar</button>
                     </div>
                   )}
                   {editing?.gid === g.gid && editing.field === 'date' ? (
