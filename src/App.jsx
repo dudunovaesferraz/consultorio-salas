@@ -183,6 +183,22 @@ function financeForBookings(list) {
   });
   return { pago, aberto, vencido };
 }
+// Same as financeForBookings, but "em aberto" only counts the CURRENT month — anything due in a
+// later month is broken out separately as "futuro" (a forecast), not mixed into what's owed now.
+function financeForBookingsSplit(list) {
+  const today = todayStr();
+  const currentMonthKey = today.slice(0, 7);
+  let pago = 0, aberto = 0, vencido = 0, futuro = 0;
+  list.forEach(b => {
+    if (b.status !== 'confirmada') return;
+    if (b.paymentStatus === 'pago') { pago += b.price; return; }
+    const due = dueDateFor(b);
+    if (due.slice(0, 7) > currentMonthKey) { futuro += b.price; return; }
+    if (due >= today) aberto += b.price;
+    else vencido += b.price;
+  });
+  return { pago, aberto, vencido, futuro };
+}
 function paymentBadgeStatus(b) {
   if (b.status !== 'confirmada') return null;
   if (b.paymentStatus === 'pago') return 'pago';
@@ -1139,7 +1155,7 @@ function UsersTab({ data, showToast }) {
     <div className="rk-fade" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       {users.map(u => {
         const bookings = (data.bookings || []).filter(b => b.userId === u.id);
-        const fin = financeForBookings(bookings);
+        const fin = financeForBookingsSplit(bookings);
         const isOpen = expanded === u.id;
         return (
           <Card key={u.id} style={{ padding: '15px 18px' }}>
@@ -1161,7 +1177,7 @@ function UsersTab({ data, showToast }) {
               </div>
             </div>
             <div style={{ display: 'flex', gap: 18, marginTop: 12, flexWrap: 'wrap' }}>
-              <MiniStat label="Pago" value={fmtMoney(fin.pago)} color={C.success} /><MiniStat label="Em aberto" value={fmtMoney(fin.aberto)} color={C.warning} /><MiniStat label="Vencido" value={fmtMoney(fin.vencido)} color={C.danger} />
+              <MiniStat label="Pago" value={fmtMoney(fin.pago)} color={C.success} /><MiniStat label="Em aberto" value={fmtMoney(fin.aberto)} color={C.warning} /><MiniStat label="Vencido" value={fmtMoney(fin.vencido)} color={C.danger} />{fin.futuro > 0 && <MiniStat label="Previsão (meses futuros)" value={fmtMoney(fin.futuro)} color={C.inkFaint} />}
             </div>
             {isOpen && (
               <div style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${C.borderSoft}`, display: 'flex', flexDirection: 'column', gap: 6 }}>
