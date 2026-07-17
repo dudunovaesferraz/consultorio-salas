@@ -1556,6 +1556,13 @@ function FinanceTab({ data, showToast }) {
   const totals = financeForBookings(currentAll);
   const futureTotal = futureAll.reduce((sum, b) => sum + b.price, 0);
 
+  const fixedGroupsByUser = {};
+  all.forEach(b => {
+    if (b.recurrence === 'fixa_mensal' && b.groupId) {
+      (fixedGroupsByUser[b.userId] || (fixedGroupsByUser[b.userId] = new Set())).add(b.groupId);
+    }
+  });
+
   const filtered = currentAll.filter(b => b.price > 0 && (filter === 'todos' || paymentBadgeStatus(b) === filter)).sort((a, b) => dueDateFor(a) < dueDateFor(b) ? 1 : -1);
   const futureSorted = futureAll.slice().sort((a, b) => dueDateFor(a) < dueDateFor(b) ? -1 : 1);
 
@@ -1573,22 +1580,26 @@ function FinanceTab({ data, showToast }) {
     }
   };
 
-  const row = (b) => (
-    <Card key={b.id} style={{ padding: '13px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-      <div>
-        <div className="rk-body" style={{ fontSize: 13.5, fontWeight: 600, color: C.ink }}>{b.userName}</div>
-        <div className="rk-body" style={{ fontSize: 12, color: C.inkMuted, marginTop: 2 }}>
-          {b.roomName} · {b.slotLabel} · <span className="rk-mono">{fmtBR(b.date)}</span>
-          {b.recurrence === 'fixa_mensal' && <span className="rk-mono"> · vence {fmtBR(dueDateFor(b))}</span>}
+  const row = (b) => {
+    const groupCount = fixedGroupsByUser[b.userId]?.size || 0;
+    const isConsolidated = b.recurrence === 'fixa_mensal' && groupCount > 1;
+    return (
+      <Card key={b.id} style={{ padding: '13px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <div>
+          <div className="rk-body" style={{ fontSize: 13.5, fontWeight: 600, color: C.ink }}>{b.userName}</div>
+          <div className="rk-body" style={{ fontSize: 12, color: C.inkMuted, marginTop: 2 }}>
+            {isConsolidated ? `Reservas fixas (${groupCount})` : `${b.roomName} · ${b.slotLabel}`} · <span className="rk-mono">{fmtBR(b.date)}</span>
+            {b.recurrence === 'fixa_mensal' && <span className="rk-mono"> · vence {fmtBR(dueDateFor(b))}</span>}
+          </div>
         </div>
-      </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <span className="rk-mono" style={{ fontWeight: 650, color: C.ink, fontSize: 14 }}>{fmtMoney(b.price)}</span><Badge tone={paymentBadgeStatus(b)}>{paymentBadgeStatus(b)}</Badge>
-        <Btn size="sm" variant={b.paymentStatus === 'pago' ? 'subtle' : 'success'} icon={b.paymentStatus === 'pago' ? X : Check} onClick={() => togglePaid(b)}>{b.paymentStatus === 'pago' ? 'Desmarcar' : 'Recebido'}</Btn>
-        {b.date >= todayStr() && <Btn size="sm" variant="danger" icon={X} onClick={() => cancelBooking(b)}>{b.recurrence === 'fixa_mensal' ? 'Cancelar cobrança' : 'Cancelar'}</Btn>}
-      </div>
-    </Card>
-  );
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span className="rk-mono" style={{ fontWeight: 650, color: C.ink, fontSize: 14 }}>{fmtMoney(b.price)}</span><Badge tone={paymentBadgeStatus(b)}>{paymentBadgeStatus(b)}</Badge>
+          <Btn size="sm" variant={b.paymentStatus === 'pago' ? 'subtle' : 'success'} icon={b.paymentStatus === 'pago' ? X : Check} onClick={() => togglePaid(b)}>{b.paymentStatus === 'pago' ? 'Desmarcar' : 'Recebido'}</Btn>
+          {b.date >= todayStr() && <Btn size="sm" variant="danger" icon={X} onClick={() => cancelBooking(b)}>{b.recurrence === 'fixa_mensal' ? 'Cancelar cobrança' : 'Cancelar'}</Btn>}
+        </div>
+      </Card>
+    );
+  };
 
   return (
     <div className="rk-fade">
