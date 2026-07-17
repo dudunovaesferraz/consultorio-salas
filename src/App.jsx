@@ -231,7 +231,11 @@ function reconcileRecurringGroup({ allBookings, room, groupId, startDate, slotTy
 
   let updated = [...allBookings];
   let added = 0, revived = 0, cancelled = 0;
-  const availabilityLike = () => updated.map(b => ({ roomId: b.roomId, date: b.date, slotType: b.slotType, status: b.status }));
+  // Only pending/confirmed bookings actually occupy a slot — cancelled or rejected ones must never
+  // block generating or reviving an occurrence, no matter how old they are.
+  const availabilityLike = (excludeId) => updated
+    .filter(b => (b.status === 'pendente' || b.status === 'confirmada') && b.id !== excludeId)
+    .map(b => ({ roomId: b.roomId, date: b.date, slotType: b.slotType, status: b.status }));
 
   // The negotiated value is a MONTHLY charge, not a per-occurrence one: only the first weekly
   // occurrence that falls in a given calendar month carries the price, the rest of that month's
@@ -245,8 +249,7 @@ function reconcileRecurringGroup({ allBookings, room, groupId, startDate, slotTy
     const existing = updated.find(b => b.groupId === groupId && b.date === date);
     if (existing) {
       if (existing.status !== 'confirmada') {
-        const others = availabilityLike().filter((_, i) => updated[i].id !== existing.id);
-        const avail = getAvailableSlotKeys(room, date, others);
+        const avail = getAvailableSlotKeys(room, date, availabilityLike(existing.id));
         if (avail.includes(slotType) || date === startDate) {
           const chargeThis = !monthHasCharge.has(monthKey);
           updated = updated.map(b => b.id === existing.id ? { ...b, status: 'confirmada', recurrenceEndDate: newEndDate, dueDay: dueDay || b.dueDay, price: chargeThis ? price : 0 } : b);
@@ -259,7 +262,7 @@ function reconcileRecurringGroup({ allBookings, room, groupId, startDate, slotTy
         if (existing.price > 0) monthHasCharge.add(monthKey);
       }
     } else {
-      const avail = getAvailableSlotKeys(room, date, availabilityLike());
+      const avail = getAvailableSlotKeys(room, date, availabilityLike(null));
       if (avail.includes(slotType)) {
         const chargeThis = !monthHasCharge.has(monthKey);
         updated.push({
