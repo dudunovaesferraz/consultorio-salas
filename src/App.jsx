@@ -1207,7 +1207,21 @@ function ShiftHoursTab({ data, showToast }) {
   const [dirty, setDirty] = useState(false);
   useEffect(() => { setDraft(JSON.parse(JSON.stringify(data.shiftHours || defaultHours()))); }, [data.shiftHours]);
   const update = (slotKey, edge, value) => { setDraft(deriveFullShifts({ ...draft, [slotKey]: { ...draft[slotKey], [edge]: value } })); setDirty(true); };
-  const save = async () => { await data.saveShiftHours(draft); setDirty(false); showToast('Horários dos turnos atualizados para todas as salas.', 'ok'); };
+  const save = async () => {
+    await data.saveShiftHours(draft);
+    // Bookings snapshot their slot label at creation time (so history stays accurate), but future
+    // reservations should follow the room's real current hours — refresh those now.
+    const today = todayStr();
+    const refreshed = (data.bookings || []).map(b => {
+      if (b.date < today || (b.status !== 'confirmada' && b.status !== 'pendente')) return b;
+      const newLabel = fullSlotLabel(draft, b.slotType);
+      return newLabel !== b.slotLabel ? { ...b, slotLabel: newLabel } : b;
+    });
+    const changedCount = refreshed.filter((b, i) => b.slotLabel !== (data.bookings || [])[i]?.slotLabel).length;
+    if (changedCount > 0) await data.syncBookings(refreshed);
+    setDirty(false);
+    showToast(changedCount > 0 ? `Horários atualizados — ${changedCount} reserva(s) futura(s) já refletem o novo horário.` : 'Horários dos turnos atualizados para todas as salas.', 'ok');
+  };
 
   return (
     <div className="rk-fade">
