@@ -204,6 +204,37 @@ function paymentBadgeStatus(b) {
   if (b.paymentStatus === 'pago') return 'pago';
   return dueDateFor(b) >= todayStr() ? 'aberto' : 'vencido';
 }
+// Filters bookings by a reporting period: 'mes' (current calendar month only), 'tudo' (no filter),
+// or 'custom' (an explicit from/to date range, compared against each booking's due date).
+function filterByPeriod(list, period, customFrom, customTo) {
+  if (period === 'tudo') return list;
+  if (period === 'mes') {
+    const mk = todayStr().slice(0, 7);
+    return list.filter(b => dueDateFor(b).slice(0, 7) === mk);
+  }
+  return list.filter(b => {
+    const due = dueDateFor(b);
+    if (customFrom && due < customFrom) return false;
+    if (customTo && due > customTo) return false;
+    return true;
+  });
+}
+function PeriodSelector({ period, setPeriod, customFrom, setCustomFrom, customTo, setCustomTo }) {
+  return (
+    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 14 }}>
+      {[{ v: 'mes', l: 'Este mês' }, { v: 'tudo', l: 'Todo o período' }, { v: 'custom', l: 'Período específico' }].map(o => (
+        <button key={o.v} onClick={() => setPeriod(o.v)} className="rk-body rk-btn rk-focus" style={{ padding: '6px 13px', borderRadius: 999, fontSize: 12.5, fontWeight: 600, cursor: 'pointer', border: `1.5px solid ${period === o.v ? C.primary : C.border}`, background: period === o.v ? C.primary : C.surface, color: period === o.v ? '#fff' : C.inkMuted }}>{o.l}</button>
+      ))}
+      {period === 'custom' && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <input type="date" className="rk-focus rk-mono" style={{ ...inputStyle, padding: '6px 8px', width: 145 }} value={customFrom} onChange={e => setCustomFrom(e.target.value)} />
+          <span className="rk-body" style={{ fontSize: 12, color: C.inkFaint }}>até</span>
+          <input type="date" className="rk-focus rk-mono" style={{ ...inputStyle, padding: '6px 8px', width: 145 }} value={customTo} onChange={e => setCustomTo(e.target.value)} />
+        </div>
+      )}
+    </div>
+  );
+}
 
 /* ============================== DB <-> JS MAPPERS ============================== */
 function roomFromDb(r) { return { id: r.id, name: r.name, prices: r.prices, availability: r.availability }; }
@@ -1137,6 +1168,9 @@ function RequestsTab({ data, showToast }) {
 function UsersTab({ data, showToast }) {
   const users = (data.profiles || []).filter(u => u.role === 'tenant');
   const [expanded, setExpanded] = useState(null);
+  const [period, setPeriod] = useState('mes');
+  const [customFrom, setCustomFrom] = useState('');
+  const [customTo, setCustomTo] = useState('');
 
   const setStatus = async (id, status) => { await data.saveProfiles(users.map(u => u.id === id ? { ...u, status } : u)); showToast(status === 'ativo' ? 'Usuário habilitado.' : 'Usuário desabilitado.', 'ok'); };
   const cancelBooking = async (b) => {
@@ -1153,9 +1187,11 @@ function UsersTab({ data, showToast }) {
   if (users.length === 0) return <div className="rk-body rk-fade" style={{ color: C.inkFaint, fontSize: 14, padding: '30px 0' }}>Nenhum locatário cadastrado ainda.</div>;
   return (
     <div className="rk-fade" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <PeriodSelector period={period} setPeriod={setPeriod} customFrom={customFrom} setCustomFrom={setCustomFrom} customTo={customTo} setCustomTo={setCustomTo} />
       {users.map(u => {
-        const bookings = (data.bookings || []).filter(b => b.userId === u.id);
-        const fin = financeForBookingsSplit(bookings);
+        const allBookings = (data.bookings || []).filter(b => b.userId === u.id);
+        const bookings = filterByPeriod(allBookings, period, customFrom, customTo);
+        const fin = period === 'mes' ? financeForBookingsSplit(bookings) : { ...financeForBookings(bookings), futuro: 0 };
         const isOpen = expanded === u.id;
         return (
           <Card key={u.id} style={{ padding: '15px 18px' }}>
@@ -1181,8 +1217,8 @@ function UsersTab({ data, showToast }) {
             </div>
             {isOpen && (
               <div style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${C.borderSoft}`, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {bookings.length === 0 && <div className="rk-body" style={{ fontSize: 12.5, color: C.inkFaint }}>Sem reservas.</div>}
-                {bookings.sort((a, b) => b.date < a.date ? -1 : 1).map(b => (
+                {allBookings.length === 0 && <div className="rk-body" style={{ fontSize: 12.5, color: C.inkFaint }}>Sem reservas.</div>}
+                {allBookings.sort((a, b) => b.date < a.date ? -1 : 1).map(b => (
                   <div key={b.id} className="rk-body" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12.5, color: C.inkMuted, padding: '4px 0' }}>
                     <span>{b.roomName} · {b.slotLabel} · <span className="rk-mono">{fmtBR(b.date)}</span></span>
                     <span style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
@@ -1547,12 +1583,16 @@ function RecurringTab({ data, showToast }) {
 function FinanceTab({ data, showToast }) {
   const [filter, setFilter] = useState('todos');
   const [showFuture, setShowFuture] = useState(false);
+  const [period, setPeriod] = useState('mes');
+  const [customFrom, setCustomFrom] = useState('');
+  const [customTo, setCustomTo] = useState('');
   const all = (data.bookings || []).filter(b => b.status === 'confirmada');
   const currentMonthKey = todayStr().slice(0, 7);
   const isFutureMonth = (b) => dueDateFor(b).slice(0, 7) > currentMonthKey;
 
-  const currentAll = all.filter(b => !isFutureMonth(b));
-  const futureAll = all.filter(b => isFutureMonth(b) && b.price > 0);
+  const inScope = filterByPeriod(all, period, customFrom, customTo);
+  const currentAll = period === 'mes' ? inScope.filter(b => !isFutureMonth(b)) : inScope;
+  const futureAll = period === 'mes' ? inScope.filter(b => isFutureMonth(b) && b.price > 0) : [];
   const totals = financeForBookings(currentAll);
   const futureTotal = futureAll.reduce((sum, b) => sum + b.price, 0);
 
@@ -1603,6 +1643,7 @@ function FinanceTab({ data, showToast }) {
 
   return (
     <div className="rk-fade">
+      <PeriodSelector period={period} setPeriod={setPeriod} customFrom={customFrom} setCustomFrom={setCustomFrom} customTo={customTo} setCustomTo={setCustomTo} />
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 18 }}>
         <StatCard label="Recebido" value={fmtMoney(totals.pago)} tone="success" icon={CheckCircle2} /><StatCard label="Em aberto" value={fmtMoney(totals.aberto)} tone="warning" icon={Clock} /><StatCard label="Vencido" value={fmtMoney(totals.vencido)} tone="danger" icon={AlertCircle} />
       </div>
