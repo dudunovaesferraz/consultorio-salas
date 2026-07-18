@@ -33,6 +33,14 @@ const FONTS = `
 .rk-btn { transition: transform .12s ease, box-shadow .12s ease, background-color .12s ease; }
 .rk-btn:active { transform: translateY(1px); }
 input, select, textarea, button { font-family: inherit; }
+.rk-book-grid { display: grid; grid-template-columns: minmax(0,1fr) minmax(280px,340px); gap: 20px; }
+.rk-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+@media (max-width: 720px) {
+  .rk-book-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 380px) {
+  .rk-2col { grid-template-columns: 1fr; }
+}
 `;
 
 /* ============================== SLOT TYPES ============================== */
@@ -625,7 +633,7 @@ function AgendaCalendarTab({ data }) {
   const dayEvents = bookingsByDate[selectedDate] || [];
 
   return (
-    <div className="rk-fade" style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(260px, 320px)', gap: 20 }}>
+    <div className="rk-fade rk-book-grid">
       <Card style={{ padding: '16px 16px 18px' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
           <button onClick={() => setCursor(new Date(year, month - 1, 1))} className="rk-btn rk-focus" style={{ background: 'none', border: `1px solid ${C.border}`, borderRadius: 7, width: 28, height: 28, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><ChevronLeft size={15} /></button>
@@ -857,7 +865,7 @@ function BookTab({ data, profile, showToast }) {
   if (!room) return <div className="rk-body" style={{ color: C.inkMuted }}>Nenhuma sala cadastrada ainda.</div>;
 
   return (
-    <div className="rk-fade" style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(280px, 340px)', gap: 20 }}>
+    <div className="rk-fade rk-book-grid">
       <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 2 }}>
         {rooms.map(r => <RoomTag key={r.id} room={r} selected={r.id === roomId} onClick={() => setRoomId(r.id)} subtitle={`meio ${fmtMoney(r.prices.half)} · turno ${fmtMoney(r.prices.shift)} · diária ${fmtMoney(r.prices.daily)}`} />)}
       </div>
@@ -1051,7 +1059,7 @@ function ManagerBookTab({ data, profile, showToast }) {
   if (!room) return <div className="rk-body" style={{ color: C.inkMuted }}>Nenhuma sala cadastrada ainda.</div>;
 
   return (
-    <div className="rk-fade" style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(280px, 340px)', gap: 20 }}>
+    <div className="rk-fade rk-book-grid">
       <div style={{ gridColumn: '1 / -1' }}>
         <div className="rk-body" style={{ fontSize: 12.5, fontWeight: 600, color: C.inkMuted, marginBottom: 8 }}>Reservar para</div>
         <select className="rk-focus rk-body" style={{ ...inputStyle, maxWidth: 320 }} value={forWhom} onChange={e => setForWhom(e.target.value)}>
@@ -1094,7 +1102,7 @@ function ManagerBookTab({ data, profile, showToast }) {
                 ))}
               </div>
               {recurrence === 'fixa_mensal' && (
-                <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <div className="rk-2col" style={{ marginTop: 10 }}>
                   <Field label="Repetir até"><input type="date" className="rk-focus rk-mono" style={inputStyle} value={recurrenceEndDate} min={minEndDate} max={maxEndDate} onChange={e => setRecurrenceEndDate(e.target.value)} /></Field>
                   <Field label="Dia de vencimento"><input type="number" min="1" max="31" className="rk-focus rk-mono" style={inputStyle} value={dueDay} onChange={e => setDueDay(e.target.value)} /></Field>
                 </div>
