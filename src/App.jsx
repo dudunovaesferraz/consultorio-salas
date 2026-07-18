@@ -235,9 +235,9 @@ function PeriodSelector({ period, setPeriod, customFrom, setCustomFrom, customTo
       ))}
       {period === 'custom' && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <input type="date" className="rk-focus rk-mono" style={{ ...inputStyle, padding: '6px 8px', width: 145 }} value={customFrom} onChange={e => setCustomFrom(e.target.value)} />
+          <input type="date" className="rk-focus rk-mono" style={{ ...inputStyle, padding: '6px 8px', width: 130 }} value={customFrom} onChange={e => setCustomFrom(e.target.value)} />
           <span className="rk-body" style={{ fontSize: 12, color: C.inkFaint }}>até</span>
-          <input type="date" className="rk-focus rk-mono" style={{ ...inputStyle, padding: '6px 8px', width: 145 }} value={customTo} onChange={e => setCustomTo(e.target.value)} />
+          <input type="date" className="rk-focus rk-mono" style={{ ...inputStyle, padding: '6px 8px', width: 130 }} value={customTo} onChange={e => setCustomTo(e.target.value)} />
         </div>
       )}
     </div>
@@ -1504,7 +1504,7 @@ function RecurringTab({ data, showToast }) {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10, padding: '0 4px' }}>
               <span className="rk-display" style={{ fontSize: 15.5, fontWeight: 650, color: C.ink }}>{u.userName} <span className="rk-body" style={{ fontSize: 12, fontWeight: 500, color: C.inkFaint }}>· {u.groups.length} reservas fixas</span></span>
               {editing?.userId === u.userId && editing.field === 'total' ? (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                   <div style={{ position: 'relative' }}>
                     <span className="rk-mono" style={{ position: 'absolute', left: 9, top: 9, fontSize: 12, color: C.inkFaint }}>R$</span>
                     <input type="number" min="0" autoFocus className="rk-focus rk-mono" style={{ ...inputStyle, width: 130, paddingLeft: 30 }} value={draftTotal} onChange={e => setDraftTotal(e.target.value)} />
@@ -1545,7 +1545,7 @@ function RecurringTab({ data, showToast }) {
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 18, flexWrap: 'wrap' }}>
                   {editing?.gid === g.gid && editing.field === 'price' ? (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                       <div style={{ position: 'relative' }}>
                         <span className="rk-mono" style={{ position: 'absolute', left: 9, top: 9, fontSize: 12, color: C.inkFaint }}>R$</span>
                         <input type="number" min="0" autoFocus className="rk-focus rk-mono" style={{ ...inputStyle, width: 120, paddingLeft: 30 }} value={draftPrice} onChange={e => setDraftPrice(e.target.value)} />
@@ -1565,7 +1565,7 @@ function RecurringTab({ data, showToast }) {
                     </div>
                   )}
                   {editing?.gid === g.gid && editing.field === 'dueday' ? (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                       <span className="rk-body" style={{ fontSize: 11.5, color: C.inkMuted }}>todo dia</span>
                       <input type="number" min="1" max="31" autoFocus className="rk-focus rk-mono" style={{ ...inputStyle, width: 70 }} value={draftDueDay} onChange={e => setDraftDueDay(e.target.value)} />
                       <Btn size="sm" variant="success" icon={Check} onClick={() => saveDueDay(g)}>Salvar</Btn>
@@ -1579,7 +1579,7 @@ function RecurringTab({ data, showToast }) {
                     </div>
                   )}
                   {editing?.gid === g.gid && editing.field === 'date' ? (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                       <input type="date" autoFocus className="rk-focus rk-mono" style={{ ...inputStyle, width: 150 }} min={g.rep.date} value={draftDate} onChange={e => setDraftDate(e.target.value)} />
                       <Btn size="sm" variant="success" icon={Check} onClick={() => saveDate(g)}>Salvar</Btn>
                       <Btn size="sm" variant="ghost" onClick={() => setEditing(null)}>Cancelar</Btn>
@@ -1680,7 +1680,7 @@ function FinanceTab({ data, showToast }) {
 
       {futureSorted.length > 0 && (
         <div style={{ marginTop: 24 }}>
-          <button onClick={() => setShowFuture(!showFuture)} className="rk-body rk-btn rk-focus" style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'none', border: 'none', cursor: 'pointer', padding: '8px 0', width: '100%', borderTop: `1px solid ${C.borderSoft}` }}>
+          <button onClick={() => setShowFuture(!showFuture)} className="rk-body rk-btn rk-focus" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', background: 'none', border: 'none', cursor: 'pointer', padding: '8px 0', width: '100%', borderTop: `1px solid ${C.borderSoft}`, textAlign: 'left' }}>
             {showFuture ? <ChevronLeft size={14} style={{ transform: 'rotate(-90deg)' }} /> : <ChevronRight size={14} />}
             <span style={{ fontSize: 13, fontWeight: 650, color: C.ink }}>Lançamentos futuros</span>
             <span style={{ fontSize: 12, color: C.inkFaint }}>({futureSorted.length} · {fmtMoney(futureTotal)} nos próximos meses)</span>
