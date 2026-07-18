@@ -1173,6 +1173,12 @@ function UsersTab({ data, showToast }) {
   const [customTo, setCustomTo] = useState('');
 
   const setStatus = async (id, status) => { await data.saveProfiles(users.map(u => u.id === id ? { ...u, status } : u)); showToast(status === 'ativo' ? 'Usuário habilitado.' : 'Usuário desabilitado.', 'ok'); };
+  const [promoting, setPromoting] = useState(null);
+  const promoteToManager = async (u) => {
+    await data.saveProfiles((data.profiles || []).map(p => p.id === u.id ? { ...p, role: 'manager', status: 'ativo' } : p));
+    setPromoting(null);
+    showToast(`${u.name} agora é gestor e tem acesso total ao sistema.`, 'ok');
+  };
   const cancelBooking = async (b) => {
     const updated = cancelBookingUpdate(b, data.bookings || []);
     await data.syncBookings(updated);
@@ -1209,9 +1215,17 @@ function UsersTab({ data, showToast }) {
                 {u.status !== 'ativo' && <Btn size="sm" variant="success" icon={UserCheck} onClick={() => setStatus(u.id, 'ativo')}>Habilitar</Btn>}
                 {u.status === 'ativo' && <Btn size="sm" variant="danger" icon={UserX} onClick={() => setStatus(u.id, 'desabilitado')}>Desabilitar</Btn>}
                 <Btn size="sm" variant="subtle" icon={KeyRound} onClick={() => sendReset(u)}>Enviar link de nova senha</Btn>
+                <Btn size="sm" variant="subtle" icon={ShieldCheck} onClick={() => setPromoting(u.id)}>Tornar gestor</Btn>
                 <Btn size="sm" variant="ghost" onClick={() => setExpanded(isOpen ? null : u.id)}>{isOpen ? 'Ocultar' : 'Detalhes'}</Btn>
               </div>
             </div>
+            {promoting === u.id && (
+              <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${C.borderSoft}`, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <span className="rk-body" style={{ fontSize: 11.5, color: C.danger }}>Tornar {u.name} gestor dá acesso total ao sistema (salas, usuários, financeiro). Confirma?</span>
+                <Btn size="sm" variant="danger" icon={ShieldCheck} onClick={() => promoteToManager(u)}>Confirmar</Btn>
+                <Btn size="sm" variant="ghost" onClick={() => setPromoting(null)}>Cancelar</Btn>
+              </div>
+            )}
             <div style={{ display: 'flex', gap: 18, marginTop: 12, flexWrap: 'wrap' }}>
               <MiniStat label="Pago" value={fmtMoney(fin.pago)} color={C.success} /><MiniStat label="Em aberto" value={fmtMoney(fin.aberto)} color={C.warning} /><MiniStat label="Vencido" value={fmtMoney(fin.vencido)} color={C.danger} />{fin.futuro > 0 && <MiniStat label="Previsão (meses futuros)" value={fmtMoney(fin.futuro)} color={C.inkFaint} />}
             </div>
