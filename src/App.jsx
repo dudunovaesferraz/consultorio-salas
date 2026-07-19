@@ -51,7 +51,7 @@ const SLOT_TYPES = [
   { key: 'meio_tarde_1', label: 'Meio Turno Tarde 1', short: 'M.Tarde 1', priceKey: 'half', atoms: ['t1'] },
   { key: 'meio_tarde_2', label: 'Meio Turno Tarde 2', short: 'M.Tarde 2', priceKey: 'half', atoms: ['t2'] },
   { key: 'turno_tarde', label: 'Turno da Tarde', short: 'Turno Tarde', priceKey: 'shift', atoms: ['t1', 't2'] },
-  { key: 'turno_noite', label: 'Turno da Noite', short: 'Turno Noite', priceKey: 'shift', atoms: ['n'] },
+  { key: 'turno_noite', label: 'Meio Turno Noite', short: 'M.Noite', priceKey: 'half', atoms: ['n'] },
   { key: 'diaria', label: 'Diária (dia inteiro + noite)', short: 'Diária', priceKey: 'daily', atoms: ['m1', 'm2', 't1', 't2', 'n'] },
 ];
 const SLOT_BY_KEY = Object.fromEntries(SLOT_TYPES.map(s => [s.key, s]));
@@ -615,9 +615,10 @@ function eventTimeLabel(slotLabel) {
   const m = (slotLabel || '').match(/\((\d{2}:\d{2})/);
   return m ? m[1] : '';
 }
-function AgendaCalendarTab({ data }) {
+function AgendaCalendarTab({ data, showToast }) {
   const [cursor, setCursor] = useState(() => { const d = new Date(); d.setDate(1); return d; });
   const [selectedDate, setSelectedDate] = useState(todayStr());
+  const [editingId, setEditingId] = useState(null);
   const year = cursor.getFullYear(), month = cursor.getMonth();
   const first = new Date(year, month, 1);
   const gridStart = new Date(year, month, 1 - first.getDay());
@@ -631,6 +632,17 @@ function AgendaCalendarTab({ data }) {
   Object.values(bookingsByDate).forEach(list => list.sort((a, b) => eventTimeLabel(a.slotLabel).localeCompare(eventTimeLabel(b.slotLabel))));
 
   const dayEvents = bookingsByDate[selectedDate] || [];
+
+  const saveOccurrence = async (original, changes) => {
+    const room = (data.rooms || []).find(r => r.id === changes.roomId);
+    const newLabel = fullSlotLabel(data.shiftHours, changes.slotType);
+    const updated = (data.bookings || []).map(b => b.id === original.id
+      ? { ...b, date: changes.date, roomId: changes.roomId, roomName: room.name, slotType: changes.slotType, slotLabel: newLabel }
+      : b);
+    await data.syncBookings(updated);
+    setEditingId(null);
+    showToast('Reserva desta semana alterada — as demais datas da série continuam normais.', 'ok');
+  };
 
   return (
     <div className="rk-fade rk-book-grid">
@@ -651,7 +663,7 @@ function AgendaCalendarTab({ data }) {
             const isSelected = ds === selectedDate;
             const isToday = ds === todayStr();
             return (
-              <button key={i} onClick={() => setSelectedDate(ds)} className="rk-btn rk-focus" style={{
+              <button key={i} onClick={() => { setSelectedDate(ds); setEditingId(null); }} className="rk-btn rk-focus" style={{
                 minHeight: 76, textAlign: 'left', padding: '4px 5px', borderRadius: 8, minWidth: 0,
                 border: `1.5px solid ${isSelected ? C.primary : isToday ? C.accent : C.borderSoft}`,
                 background: isSelected ? C.primaryLight : C.surface, opacity: inMonth ? 1 : 0.35,
@@ -690,6 +702,13 @@ function AgendaCalendarTab({ data }) {
                 </div>
                 <div className="rk-body" style={{ fontSize: 12, color: C.inkMuted, marginTop: 3 }}>{e.roomName} · {e.slotLabel}</div>
                 {e.recurrence === 'fixa_mensal' && <div className="rk-body" style={{ fontSize: 11, color: C.inkFaint, marginTop: 3, display: 'flex', alignItems: 'center', gap: 3 }}><Repeat size={10} />fixo mensal</div>}
+                {e.recurrence === 'fixa_mensal' && e.status === 'confirmada' && (
+                  editingId === e.id ? (
+                    <OccurrenceEditForm data={data} booking={e} onCancel={() => setEditingId(null)} onSave={(changes) => saveOccurrence(e, changes)} />
+                  ) : (
+                    <button onClick={() => setEditingId(e.id)} className="rk-body" style={{ background: 'none', border: 'none', color: C.primary, fontSize: 11, fontWeight: 600, cursor: 'pointer', padding: 0, marginTop: 6 }}>Alterar somente esta semana</button>
+                  )
+                )}
               </div>
             ))}
           </div>
@@ -698,6 +717,50 @@ function AgendaCalendarTab({ data }) {
     </div>
   );
 }
+
+// Lets the manager change the room/date/slot of a SINGLE occurrence of a fixed monthly booking,
+// without touching any other week in that same recurring series.
+function OccurrenceEditForm({ data, booking, onCancel, onSave }) {
+  const [date, setDate] = useState(booking.date);
+  const [roomId, setRoomId] = useState(booking.roomId);
+  const [slotType, setSlotType] = useState(booking.slotType);
+  const room = (data.rooms || []).find(r => r.id === roomId);
+
+  const conflictRows = (data.bookings || [])
+    .filter(b => b.id !== booking.id && (b.status === 'confirmada' || b.status === 'pendente'))
+    .map(b => ({ roomId: b.roomId, date: b.date, slotType: b.slotType, status: b.status }));
+  const availableSlots = room && date ? getAvailableSlotKeys(room, date, conflictRows) : [];
+  const slotStillValid = availableSlots.includes(slotType);
+
+  useEffect(() => {
+    if (availableSlots.length && !availableSlots.includes(slotType)) setSlotType(availableSlots[0]);
+  }, [roomId, date]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <div style={{ marginTop: 8, paddingTop: 10, borderTop: `1px dashed ${C.borderSoft}`, display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div className="rk-body" style={{ fontSize: 11, color: C.inkMuted }}>Isso altera só esta ocorrência — as demais semanas da série continuam com sala/horário originais.</div>
+      <div className="rk-2col">
+        <Field label="Nova data"><input type="date" className="rk-focus rk-mono" style={inputStyle} value={date} onChange={e => setDate(e.target.value)} /></Field>
+        <Field label="Sala">
+          <select className="rk-focus rk-body" style={inputStyle} value={roomId} onChange={e => setRoomId(e.target.value)}>
+            {(data.rooms || []).map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+          </select>
+        </Field>
+      </div>
+      <Field label="Turno">
+        <select className="rk-focus rk-body" style={inputStyle} value={slotType} onChange={e => setSlotType(e.target.value)}>
+          {availableSlots.length === 0 && <option value="">Sem horário disponível nesta data</option>}
+          {availableSlots.map(k => <option key={k} value={k}>{fullSlotLabel(data.shiftHours, k)}</option>)}
+        </select>
+      </Field>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <Btn size="sm" variant="success" icon={Check} disabled={!slotStillValid} onClick={() => onSave({ date, roomId, slotType })}>Salvar</Btn>
+        <Btn size="sm" variant="ghost" onClick={onCancel}>Cancelar</Btn>
+      </div>
+    </div>
+  );
+}
+
 
 /* ============================== AUTH SCREENS ============================== */
 function AuthScreen({ data, showToast }) {
@@ -1764,7 +1827,7 @@ export default function App() {
       {profile.role === 'manager' && (
         <>
           {tab === 'nova-reserva' && <ManagerBookTab data={data} profile={profile} showToast={showToast} />}
-          {tab === 'calendario' && <AgendaCalendarTab data={data} />}
+          {tab === 'calendario' && <AgendaCalendarTab data={data} showToast={showToast} />}
           {tab === 'solicitacoes' && <RequestsTab data={data} showToast={showToast} />}
           {tab === 'usuarios' && <UsersTab data={data} showToast={showToast} />}
           {tab === 'horarios' && <ShiftHoursTab data={data} showToast={showToast} />}
