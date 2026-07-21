@@ -619,6 +619,7 @@ function AgendaCalendarTab({ data, showToast }) {
   const [cursor, setCursor] = useState(() => { const d = new Date(); d.setDate(1); return d; });
   const [selectedDate, setSelectedDate] = useState(todayStr());
   const [editingId, setEditingId] = useState(null);
+  const [cancelingId, setCancelingId] = useState(null);
   const year = cursor.getFullYear(), month = cursor.getMonth();
   const first = new Date(year, month, 1);
   const gridStart = new Date(year, month, 1 - first.getDay());
@@ -644,6 +645,13 @@ function AgendaCalendarTab({ data, showToast }) {
     showToast('Reserva desta semana alterada — as demais datas da série continuam normais.', 'ok');
   };
 
+  const cancelOccurrence = async (booking) => {
+    const updated = cancelBookingUpdate(booking, data.bookings || []);
+    await data.syncBookings(updated);
+    setCancelingId(null);
+    showToast(`Reserva de ${fmtBR(booking.date)} cancelada — o valor da mensalidade não foi alterado.`, 'ok');
+  };
+
   return (
     <div className="rk-fade rk-book-grid">
       <Card style={{ padding: '16px 16px 18px' }}>
@@ -663,7 +671,7 @@ function AgendaCalendarTab({ data, showToast }) {
             const isSelected = ds === selectedDate;
             const isToday = ds === todayStr();
             return (
-              <button key={i} onClick={() => { setSelectedDate(ds); setEditingId(null); }} className="rk-btn rk-focus" style={{
+              <button key={i} onClick={() => { setSelectedDate(ds); setEditingId(null); setCancelingId(null); }} className="rk-btn rk-focus" style={{
                 minHeight: 76, textAlign: 'left', padding: '4px 5px', borderRadius: 8, minWidth: 0,
                 border: `1.5px solid ${isSelected ? C.primary : isToday ? C.accent : C.borderSoft}`,
                 background: isSelected ? C.primaryLight : C.surface, opacity: inMonth ? 1 : 0.35,
@@ -705,8 +713,17 @@ function AgendaCalendarTab({ data, showToast }) {
                 {e.recurrence === 'fixa_mensal' && e.status === 'confirmada' && (
                   editingId === e.id ? (
                     <OccurrenceEditForm data={data} booking={e} onCancel={() => setEditingId(null)} onSave={(changes) => saveOccurrence(e, changes)} />
+                  ) : cancelingId === e.id ? (
+                    <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px dashed ${C.borderSoft}`, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <span className="rk-body" style={{ fontSize: 11, color: C.danger }}>Cancelar só esta data? O valor da mensalidade continua o mesmo.</span>
+                      <Btn size="sm" variant="danger" icon={X} onClick={() => cancelOccurrence(e)}>Confirmar</Btn>
+                      <Btn size="sm" variant="ghost" onClick={() => setCancelingId(null)}>Voltar</Btn>
+                    </div>
                   ) : (
-                    <button onClick={() => setEditingId(e.id)} className="rk-body" style={{ background: 'none', border: 'none', color: C.primary, fontSize: 11, fontWeight: 600, cursor: 'pointer', padding: 0, marginTop: 6 }}>Alterar somente esta semana</button>
+                    <div style={{ display: 'flex', gap: 14, marginTop: 6, flexWrap: 'wrap' }}>
+                      <button onClick={() => setEditingId(e.id)} className="rk-body" style={{ background: 'none', border: 'none', color: C.primary, fontSize: 11, fontWeight: 600, cursor: 'pointer', padding: 0 }}>Alterar somente esta semana</button>
+                      <button onClick={() => setCancelingId(e.id)} className="rk-body" style={{ background: 'none', border: 'none', color: C.danger, fontSize: 11, fontWeight: 600, cursor: 'pointer', padding: 0 }}>Cancelar esta data</button>
+                    </div>
                   )
                 )}
               </div>
