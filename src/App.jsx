@@ -52,7 +52,7 @@ const SLOT_TYPES = [
   { key: 'meio_tarde_2', label: 'Meio Turno Tarde 2', short: 'M.Tarde 2', priceKey: 'half', atoms: ['t2'] },
   { key: 'turno_tarde', label: 'Turno da Tarde', short: 'Turno Tarde', priceKey: 'shift', atoms: ['t1', 't2'] },
   { key: 'turno_noite', label: 'Meio Turno Noite', short: 'M.Noite', priceKey: 'half', atoms: ['n'] },
-  { key: 'diaria', label: 'Diária (dia inteiro + noite)', short: 'Diária', priceKey: 'daily', atoms: ['m1', 'm2', 't1', 't2', 'n'] },
+  { key: 'diaria', label: 'Diária (manhã + tarde)', short: 'Diária', priceKey: 'daily', atoms: ['m1', 'm2', 't1', 't2'] },
 ];
 const SLOT_BY_KEY = Object.fromEntries(SLOT_TYPES.map(s => [s.key, s]));
 const WK_KEYS = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sab'];
@@ -98,11 +98,16 @@ function defaultHours() {
     turno_manha: { start: '08:00', end: '12:00' },
     meio_tarde_1: { start: '13:00', end: '15:30' }, meio_tarde_2: { start: '15:30', end: '18:00' },
     turno_tarde: { start: '13:00', end: '18:00' },
-    turno_noite: { start: '18:30', end: '22:00' }, diaria: { start: '08:00', end: '22:00' },
+    turno_noite: { start: '18:30', end: '22:00' }, diaria: { start: '08:00', end: '18:00' },
   };
 }
 function deriveFullShifts(hours) {
-  return { ...hours, turno_manha: { start: hours.meio_manha_1.start, end: hours.meio_manha_2.end }, turno_tarde: { start: hours.meio_tarde_1.start, end: hours.meio_tarde_2.end } };
+  return {
+    ...hours,
+    turno_manha: { start: hours.meio_manha_1.start, end: hours.meio_manha_2.end },
+    turno_tarde: { start: hours.meio_tarde_1.start, end: hours.meio_tarde_2.end },
+    diaria: { start: hours.meio_manha_1.start, end: hours.meio_tarde_2.end },
+  };
 }
 function timeRangeLabel(hours, slotKey) { const h = hours?.[slotKey]; return h ? `${h.start}–${h.end}` : ''; }
 function fullSlotLabel(hours, slotKey) { const st = SLOT_BY_KEY[slotKey]; const range = timeRangeLabel(hours, slotKey); return range ? `${st.label} (${range})` : st.label; }
@@ -255,6 +260,7 @@ function bookingFromDb(r) {
     requestedAt: r.requested_at ? new Date(r.requested_at).getTime() : null,
     confirmedAt: r.confirmed_at ? new Date(r.confirmed_at).getTime() : null,
     groupId: r.group_id, recurrenceEndDate: r.recurrence_end_date, dueDay: r.due_day || null,
+    isCustomContract: !!r.is_custom_contract,
   };
 }
 function bookingToDb(b) {
@@ -265,6 +271,7 @@ function bookingToDb(b) {
     requested_at: b.requestedAt ? new Date(b.requestedAt).toISOString() : new Date().toISOString(),
     confirmed_at: b.confirmedAt ? new Date(b.confirmedAt).toISOString() : null,
     group_id: b.groupId || null, recurrence_end_date: b.recurrenceEndDate || null, due_day: b.dueDay || null,
+    is_custom_contract: !!b.isCustomContract,
   };
 }
 function profileFromDb(p) {
@@ -638,11 +645,11 @@ function AgendaCalendarTab({ data, showToast }) {
     const room = (data.rooms || []).find(r => r.id === changes.roomId);
     const newLabel = fullSlotLabel(data.shiftHours, changes.slotType);
     const updated = (data.bookings || []).map(b => b.id === original.id
-      ? { ...b, date: changes.date, roomId: changes.roomId, roomName: room.name, slotType: changes.slotType, slotLabel: newLabel }
+      ? { ...b, date: changes.date, roomId: changes.roomId, roomName: room.name, slotType: changes.slotType, slotLabel: newLabel, price: changes.price }
       : b);
     await data.syncBookings(updated);
     setEditingId(null);
-    showToast('Reserva desta semana alterada — as demais datas da série continuam normais.', 'ok');
+    showToast('Reserva alterada.', 'ok');
   };
 
   const cancelOccurrence = async (booking) => {
@@ -710,19 +717,19 @@ function AgendaCalendarTab({ data, showToast }) {
                 </div>
                 <div className="rk-body" style={{ fontSize: 12, color: C.inkMuted, marginTop: 3 }}>{e.roomName} · {e.slotLabel}</div>
                 {e.recurrence === 'fixa_mensal' && <div className="rk-body" style={{ fontSize: 11, color: C.inkFaint, marginTop: 3, display: 'flex', alignItems: 'center', gap: 3 }}><Repeat size={10} />fixo mensal</div>}
-                {e.recurrence === 'fixa_mensal' && e.status === 'confirmada' && (
+                {e.status === 'confirmada' && (
                   editingId === e.id ? (
                     <OccurrenceEditForm data={data} booking={e} onCancel={() => setEditingId(null)} onSave={(changes) => saveOccurrence(e, changes)} />
                   ) : cancelingId === e.id ? (
                     <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px dashed ${C.borderSoft}`, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                      <span className="rk-body" style={{ fontSize: 11, color: C.danger }}>Cancelar só esta data? O valor da mensalidade continua o mesmo.</span>
+                      <span className="rk-body" style={{ fontSize: 11, color: C.danger }}>{e.recurrence === 'fixa_mensal' ? 'Cancelar só esta data? O valor da mensalidade continua o mesmo.' : 'Cancelar esta reserva?'}</span>
                       <Btn size="sm" variant="danger" icon={X} onClick={() => cancelOccurrence(e)}>Confirmar</Btn>
                       <Btn size="sm" variant="ghost" onClick={() => setCancelingId(null)}>Voltar</Btn>
                     </div>
                   ) : (
                     <div style={{ display: 'flex', gap: 14, marginTop: 6, flexWrap: 'wrap' }}>
-                      <button onClick={() => setEditingId(e.id)} className="rk-body" style={{ background: 'none', border: 'none', color: C.primary, fontSize: 11, fontWeight: 600, cursor: 'pointer', padding: 0 }}>Alterar somente esta semana</button>
-                      <button onClick={() => setCancelingId(e.id)} className="rk-body" style={{ background: 'none', border: 'none', color: C.danger, fontSize: 11, fontWeight: 600, cursor: 'pointer', padding: 0 }}>Cancelar esta data</button>
+                      <button onClick={() => setEditingId(e.id)} className="rk-body" style={{ background: 'none', border: 'none', color: C.primary, fontSize: 11, fontWeight: 600, cursor: 'pointer', padding: 0 }}>{e.recurrence === 'fixa_mensal' ? 'Alterar somente esta semana' : 'Editar'}</button>
+                      <button onClick={() => setCancelingId(e.id)} className="rk-body" style={{ background: 'none', border: 'none', color: C.danger, fontSize: 11, fontWeight: 600, cursor: 'pointer', padding: 0 }}>Cancelar</button>
                     </div>
                   )
                 )}
@@ -741,6 +748,7 @@ function OccurrenceEditForm({ data, booking, onCancel, onSave }) {
   const [date, setDate] = useState(booking.date);
   const [roomId, setRoomId] = useState(booking.roomId);
   const [slotType, setSlotType] = useState(booking.slotType);
+  const [price, setPrice] = useState(String(booking.price));
   const room = (data.rooms || []).find(r => r.id === roomId);
 
   const conflictRows = (data.bookings || [])
@@ -755,7 +763,9 @@ function OccurrenceEditForm({ data, booking, onCancel, onSave }) {
 
   return (
     <div style={{ marginTop: 8, paddingTop: 10, borderTop: `1px dashed ${C.borderSoft}`, display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <div className="rk-body" style={{ fontSize: 11, color: C.inkMuted }}>Isso altera só esta ocorrência — as demais semanas da série continuam com sala/horário originais.</div>
+      <div className="rk-body" style={{ fontSize: 11, color: C.inkMuted }}>
+        {booking.recurrence === 'fixa_mensal' ? 'Isso altera só esta ocorrência — as demais semanas da série continuam com sala/horário originais.' : 'Editando esta reserva avulsa.'}
+      </div>
       <div className="rk-2col">
         <Field label="Nova data"><input type="date" className="rk-focus rk-mono" style={inputStyle} value={date} onChange={e => setDate(e.target.value)} /></Field>
         <Field label="Sala">
@@ -764,14 +774,19 @@ function OccurrenceEditForm({ data, booking, onCancel, onSave }) {
           </select>
         </Field>
       </div>
-      <Field label="Turno">
-        <select className="rk-focus rk-body" style={inputStyle} value={slotType} onChange={e => setSlotType(e.target.value)}>
-          {availableSlots.length === 0 && <option value="">Sem horário disponível nesta data</option>}
-          {availableSlots.map(k => <option key={k} value={k}>{fullSlotLabel(data.shiftHours, k)}</option>)}
-        </select>
-      </Field>
+      <div className="rk-2col">
+        <Field label="Turno">
+          <select className="rk-focus rk-body" style={inputStyle} value={slotType} onChange={e => setSlotType(e.target.value)}>
+            {availableSlots.length === 0 && <option value="">Sem horário disponível</option>}
+            {availableSlots.map(k => <option key={k} value={k}>{fullSlotLabel(data.shiftHours, k)}</option>)}
+          </select>
+        </Field>
+        <Field label="Valor (R$)">
+          <input type="number" min="0" className="rk-focus rk-mono" style={inputStyle} value={price} onChange={e => setPrice(e.target.value)} />
+        </Field>
+      </div>
       <div style={{ display: 'flex', gap: 8 }}>
-        <Btn size="sm" variant="success" icon={Check} disabled={!slotStillValid} onClick={() => onSave({ date, roomId, slotType })}>Salvar</Btn>
+        <Btn size="sm" variant="success" icon={Check} disabled={!slotStillValid} onClick={() => onSave({ date, roomId, slotType, price: Number(price) || 0 })}>Salvar</Btn>
         <Btn size="sm" variant="ghost" onClick={onCancel}>Cancelar</Btn>
       </div>
     </div>
@@ -1088,6 +1103,7 @@ function ManagerBookTab({ data, profile, showToast }) {
   const rooms = data.rooms || [];
   const activeUsers = (data.profiles || []).filter(u => u.role === 'tenant' && u.status === 'ativo');
   const [forWhom, setForWhom] = useState('self');
+  const [guestName, setGuestName] = useState('');
   const [roomId, setRoomId] = useState(rooms[0]?.id);
   const room = rooms.find(r => r.id === roomId) || rooms[0];
   const [selectedDate, setSelectedDate] = useState(null);
@@ -1105,7 +1121,7 @@ function ManagerBookTab({ data, profile, showToast }) {
   const availableForDate = (room && selectedDate) ? getAvailableSlotKeys(room, selectedDate, data.availabilityRows || []) : [];
   const minEndDate = selectedDate ? addDays(selectedDate, 7) : undefined;
   const maxEndDate = selectedDate ? addDays(selectedDate, 365) : undefined;
-  const targetUser = forWhom === 'self' ? profile : activeUsers.find(u => u.id === forWhom);
+  const targetUser = forWhom === 'self' ? profile : forWhom === 'guest' ? (guestName.trim() ? { id: null, name: guestName.trim() } : null) : activeUsers.find(u => u.id === forWhom);
 
   const submit = async () => {
     if (!room || !selectedDate || !slotType || !targetUser) return;
@@ -1115,7 +1131,7 @@ function ManagerBookTab({ data, profile, showToast }) {
     const now = Date.now();
     const finalDueDay = recurrence === 'fixa_mensal' ? (Number(dueDay) || parseDate(selectedDate).getDate()) : null;
     const baseBooking = {
-      id: uid(), userId: targetUser.id, userName: targetUser.name, roomId: room.id, roomName: room.name,
+      id: uid(), userId: targetUser.id, userName: forWhom === 'guest' ? `${targetUser.name} (avulso)` : targetUser.name, roomId: room.id, roomName: room.name,
       date: selectedDate, slotType, slotLabel: fullSlotLabel(data.shiftHours, slotType), recurrence, price: finalPrice,
       status: 'confirmada', paymentStatus: 'pendente', paidAt: null, requestedAt: now, confirmedAt: now,
       groupId: recurrence === 'fixa_mensal' ? undefined : null, recurrenceEndDate: recurrence === 'fixa_mensal' ? recurrenceEndDate : null,
@@ -1129,10 +1145,10 @@ function ManagerBookTab({ data, profile, showToast }) {
         allBookings: updated, room, groupId: baseBooking.id, startDate: baseBooking.date, slotType, slotLabel: baseBooking.slotLabel,
         newEndDate: recurrenceEndDate, userId: targetUser.id, userName: targetUser.name, roomId: room.id, roomName: room.name, price: finalPrice, requestedAt: now, dueDay: finalDueDay,
       });
-      updated = consolidateUserFixedBilling(reconciled, targetUser.id, todayStr()); addedCount = added;
+      updated = targetUser.id ? consolidateUserFixedBilling(reconciled, targetUser.id, todayStr()) : reconciled; addedCount = added;
     }
     await data.syncBookings(updated);
-    setBusy(false); setSelectedDate(null); setSlotType(null); setRecurrence('avulsa'); setRecurrenceEndDate(''); setDueDay('');
+    setBusy(false); setSelectedDate(null); setSlotType(null); setRecurrence('avulsa'); setRecurrenceEndDate(''); setDueDay(''); setGuestName('');
     showToast(`Reserva criada e confirmada para ${targetUser.name}${addedCount ? ` (+ ${addedCount} ocorrências futuras)` : ''}.`, 'ok');
   };
 
@@ -1145,54 +1161,161 @@ function ManagerBookTab({ data, profile, showToast }) {
         <select className="rk-focus rk-body" style={{ ...inputStyle, maxWidth: 320 }} value={forWhom} onChange={e => setForWhom(e.target.value)}>
           <option value="self">Eu mesmo ({profile.name})</option>
           {activeUsers.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+          <option value="guest">Avulso (sem cadastro)...</option>
         </select>
-        {activeUsers.length === 0 && <div className="rk-body" style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 6 }}>Nenhum locatário habilitado ainda.</div>}
-      </div>
-      <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 2 }}>
-        {rooms.map(r => <RoomTag key={r.id} room={r} selected={r.id === roomId} onClick={() => setRoomId(r.id)} subtitle={`meio ${fmtMoney(r.prices.half)} · turno ${fmtMoney(r.prices.shift)} · diária ${fmtMoney(r.prices.daily)}`} />)}
-      </div>
-      <MonthCalendar room={room} availabilityRows={data.availabilityRows || []} selectedDate={selectedDate} onPickDate={(ds) => { setSelectedDate(ds); setSlotType(null); }} />
-      <Card style={{ padding: 18 }}>
-        <div className="rk-display" style={{ fontSize: 16, fontWeight: 650, marginBottom: 4, color: C.ink }}>{selectedDate ? fmtBR(selectedDate) : 'Selecione uma data'}</div>
-        <div className="rk-body" style={{ fontSize: 12.5, color: C.inkMuted, marginBottom: 16 }}>{room.name}</div>
-        {!selectedDate && <div className="rk-body" style={{ fontSize: 13, color: C.inkFaint, padding: '20px 0' }}>Clique em um dia disponível no calendário ao lado.</div>}
-        {selectedDate && availableForDate.length === 0 && <div className="rk-body" style={{ fontSize: 13, color: C.danger, padding: '12px 0' }}>Sem horários disponíveis para esta data.</div>}
-        {selectedDate && availableForDate.length > 0 && (
-          <>
-            <div style={{ marginBottom: 16 }}>
-              <div className="rk-body" style={{ fontSize: 12.5, fontWeight: 600, color: C.inkMuted, marginBottom: 8 }}>Horário</div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-                {availableForDate.map(key => {
-                  const st = SLOT_BY_KEY[key]; const listPrice = room.prices[st.priceKey]; const sel = slotType === key;
-                  return (
-                    <button key={key} onClick={() => setSlotType(key)} className="rk-btn rk-focus" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', borderRadius: 9, border: `1.5px solid ${sel ? C.primary : C.border}`, background: sel ? C.primaryLight : C.surface, cursor: 'pointer', textAlign: 'left' }}>
-                      <span className="rk-body" style={{ fontSize: 13.5, fontWeight: 600, color: C.ink }}>{fullSlotLabel(data.shiftHours, key)}</span>
-                      <span className="rk-mono" style={{ fontSize: 13.5, fontWeight: 600, color: C.primaryDark }}>{fmtMoney(listPrice)}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-            {slotType && <Field label={recurrence === 'fixa_mensal' ? 'Valor mensal (editável)' : 'Preço desta reserva (editável)'}><div style={{ position: 'relative' }}><span className="rk-mono" style={{ position: 'absolute', left: 11, top: 9, fontSize: 13, color: C.inkFaint }}>R$</span><input type="number" min="0" className="rk-focus rk-mono" style={{ ...inputStyle, paddingLeft: 34 }} value={price} onChange={e => setPrice(e.target.value)} /></div></Field>}
-            <div style={{ marginBottom: 18 }}>
-              <div className="rk-body" style={{ fontSize: 12.5, fontWeight: 600, color: C.inkMuted, marginBottom: 8 }}>Recorrência</div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                {[{ v: 'avulsa', l: 'Avulsa' }, { v: 'fixa_mensal', l: 'Fixo mensal' }].map(o => (
-                  <button key={o.v} onClick={() => setRecurrence(o.v)} className="rk-btn rk-focus" style={{ flex: 1, padding: '8px 10px', borderRadius: 8, fontSize: 12.5, fontWeight: 600, cursor: 'pointer', border: `1.5px solid ${recurrence === o.v ? C.primary : C.border}`, background: recurrence === o.v ? C.primaryLight : C.surface, color: recurrence === o.v ? C.primaryDark : C.inkMuted }}>{o.l}</button>
-                ))}
-              </div>
-              {recurrence === 'fixa_mensal' && (
-                <div className="rk-2col" style={{ marginTop: 10 }}>
-                  <Field label="Repetir até"><input type="date" className="rk-focus rk-mono" style={inputStyle} value={recurrenceEndDate} min={minEndDate} max={maxEndDate} onChange={e => setRecurrenceEndDate(e.target.value)} /></Field>
-                  <Field label="Dia de vencimento"><input type="number" min="1" max="31" className="rk-focus rk-mono" style={inputStyle} value={dueDay} onChange={e => setDueDay(e.target.value)} /></Field>
-                </div>
-              )}
-            </div>
-            <Btn onClick={submit} disabled={!slotType || busy} style={{ width: '100%', justifyContent: 'center' }}>{busy ? 'Criando...' : 'Criar reserva confirmada'}</Btn>
-          </>
+        {forWhom === 'guest' && (
+          <div style={{ maxWidth: 320, marginTop: 8 }}>
+            <Field label="Nome do avulso"><input className="rk-focus rk-body" style={inputStyle} value={guestName} onChange={e => setGuestName(e.target.value)} placeholder="Ex: Marcos Andrade" /></Field>
+          </div>
         )}
-      </Card>
+        {activeUsers.length === 0 && forWhom !== 'guest' && <div className="rk-body" style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 6 }}>Nenhum locatário habilitado ainda.</div>}
+      </div>
+
+      <div style={{ gridColumn: '1 / -1' }}>
+        <div className="rk-body" style={{ fontSize: 12.5, fontWeight: 600, color: C.inkMuted, marginBottom: 8 }}>Tipo de reserva</div>
+        <div style={{ display: 'flex', gap: 8, maxWidth: 480 }}>
+          {[{ v: 'avulsa', l: 'Avulsa' }, { v: 'fixa_mensal', l: 'Fixo mensal' }, { v: 'personalizado', l: 'Personalizado' }].map(o => (
+            <button key={o.v} onClick={() => setRecurrence(o.v)} className="rk-btn rk-focus" style={{ flex: 1, padding: '8px 10px', borderRadius: 8, fontSize: 12.5, fontWeight: 600, cursor: 'pointer', border: `1.5px solid ${recurrence === o.v ? C.primary : C.border}`, background: recurrence === o.v ? C.primaryLight : C.surface, color: recurrence === o.v ? C.primaryDark : C.inkMuted }}>{o.l}</button>
+          ))}
+        </div>
+        {recurrence === 'personalizado' && <div className="rk-body" style={{ fontSize: 11.5, color: C.inkMuted, marginTop: 6, lineHeight: 1.4 }}>Para contratos combinados sob medida: valor mensal fixo, mas você escolhe sala, data e turno de cada dia individualmente.</div>}
+      </div>
+
+      {recurrence === 'personalizado' ? (
+        <CustomContractBuilder data={data} targetUser={targetUser} showToast={showToast} onDone={() => setRecurrence('avulsa')} />
+      ) : (
+        <>
+          <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 2 }}>
+            {rooms.map(r => <RoomTag key={r.id} room={r} selected={r.id === roomId} onClick={() => setRoomId(r.id)} subtitle={`meio ${fmtMoney(r.prices.half)} · turno ${fmtMoney(r.prices.shift)} · diária ${fmtMoney(r.prices.daily)}`} />)}
+          </div>
+          <MonthCalendar room={room} availabilityRows={data.availabilityRows || []} selectedDate={selectedDate} onPickDate={(ds) => { setSelectedDate(ds); setSlotType(null); }} />
+          <Card style={{ padding: 18 }}>
+            <div className="rk-display" style={{ fontSize: 16, fontWeight: 650, marginBottom: 4, color: C.ink }}>{selectedDate ? fmtBR(selectedDate) : 'Selecione uma data'}</div>
+            <div className="rk-body" style={{ fontSize: 12.5, color: C.inkMuted, marginBottom: 16 }}>{room.name}</div>
+            {!selectedDate && <div className="rk-body" style={{ fontSize: 13, color: C.inkFaint, padding: '20px 0' }}>Clique em um dia disponível no calendário ao lado.</div>}
+            {selectedDate && availableForDate.length === 0 && <div className="rk-body" style={{ fontSize: 13, color: C.danger, padding: '12px 0' }}>Sem horários disponíveis para esta data.</div>}
+            {selectedDate && availableForDate.length > 0 && (
+              <>
+                <div style={{ marginBottom: 16 }}>
+                  <div className="rk-body" style={{ fontSize: 12.5, fontWeight: 600, color: C.inkMuted, marginBottom: 8 }}>Horário</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                    {availableForDate.map(key => {
+                      const st = SLOT_BY_KEY[key]; const listPrice = room.prices[st.priceKey]; const sel = slotType === key;
+                      return (
+                        <button key={key} onClick={() => setSlotType(key)} className="rk-btn rk-focus" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', borderRadius: 9, border: `1.5px solid ${sel ? C.primary : C.border}`, background: sel ? C.primaryLight : C.surface, cursor: 'pointer', textAlign: 'left' }}>
+                          <span className="rk-body" style={{ fontSize: 13.5, fontWeight: 600, color: C.ink }}>{fullSlotLabel(data.shiftHours, key)}</span>
+                          <span className="rk-mono" style={{ fontSize: 13.5, fontWeight: 600, color: C.primaryDark }}>{fmtMoney(listPrice)}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+                {slotType && <Field label={recurrence === 'fixa_mensal' ? 'Valor mensal (editável)' : 'Preço desta reserva (editável)'}><div style={{ position: 'relative' }}><span className="rk-mono" style={{ position: 'absolute', left: 11, top: 9, fontSize: 13, color: C.inkFaint }}>R$</span><input type="number" min="0" className="rk-focus rk-mono" style={{ ...inputStyle, paddingLeft: 34 }} value={price} onChange={e => setPrice(e.target.value)} /></div></Field>}
+                {recurrence === 'fixa_mensal' && (
+                  <div className="rk-2col" style={{ marginBottom: 18 }}>
+                    <Field label="Repetir até"><input type="date" className="rk-focus rk-mono" style={inputStyle} value={recurrenceEndDate} min={minEndDate} max={maxEndDate} onChange={e => setRecurrenceEndDate(e.target.value)} /></Field>
+                    <Field label="Dia de vencimento"><input type="number" min="1" max="31" className="rk-focus rk-mono" style={inputStyle} value={dueDay} onChange={e => setDueDay(e.target.value)} /></Field>
+                  </div>
+                )}
+                <Btn onClick={submit} disabled={!slotType || busy || !targetUser} style={{ width: '100%', justifyContent: 'center' }}>{busy ? 'Criando...' : 'Criar reserva confirmada'}</Btn>
+              </>
+            )}
+          </Card>
+        </>
+      )}
     </div>
+  );
+}
+
+// Lets the manager build a custom contract: a fixed monthly total value billed across a hand-picked
+// set of dates/rooms/slots (not a repeating weekly pattern) — for arrangements negotiated one-off.
+function CustomContractBuilder({ data, targetUser, showToast, onDone }) {
+  const rooms = data.rooms || [];
+  const [entries, setEntries] = useState([]); // { roomId, roomName, date, slotType, slotLabel }
+  const [roomId, setRoomId] = useState(rooms[0]?.id);
+  const [date, setDate] = useState('');
+  const [slotType, setSlotType] = useState('');
+  const [monthlyValue, setMonthlyValue] = useState('');
+  const [dueDay, setDueDay] = useState('5');
+  const [busy, setBusy] = useState(false);
+  const room = rooms.find(r => r.id === roomId) || rooms[0];
+
+  const conflictRows = [
+    ...(data.availabilityRows || []),
+    ...entries.map(e => ({ roomId: e.roomId, date: e.date, slotType: e.slotType, status: 'confirmada' })),
+  ];
+  const availableSlots = room && date ? getAvailableSlotKeys(room, date, conflictRows) : [];
+
+  const addEntry = () => {
+    if (!room || !date || !slotType) return;
+    setEntries([...entries, { roomId: room.id, roomName: room.name, date, slotType, slotLabel: fullSlotLabel(data.shiftHours, slotType) }].sort((a, b) => a.date < b.date ? -1 : 1));
+    setDate(''); setSlotType('');
+  };
+  const removeEntry = (idx) => setEntries(entries.filter((_, i) => i !== idx));
+
+  const submitContract = async () => {
+    if (!targetUser || entries.length === 0) { showToast('Adicione ao menos uma data e escolha o locatário.', 'err'); return; }
+    setBusy(true);
+    const now = Date.now();
+    const groupId = uid();
+    const finalDueDay = Math.min(Math.max(Number(dueDay) || 5, 1), 31);
+    const finalValue = Number(monthlyValue) || 0;
+    const newBookings = entries.map(e => ({
+      id: uid(), userId: targetUser.id, userName: targetUser.name, roomId: e.roomId, roomName: e.roomName,
+      date: e.date, slotType: e.slotType, slotLabel: e.slotLabel, recurrence: 'fixa_mensal', price: 0,
+      status: 'confirmada', paymentStatus: 'pendente', paidAt: null, requestedAt: now, confirmedAt: now,
+      groupId, recurrenceEndDate: null, dueDay: finalDueDay, isCustomContract: true,
+    }));
+    let updated = applyMonthlyPriceToGroup([...(data.bookings || []), ...newBookings], groupId, finalValue, todayStr());
+    updated = targetUser.id ? consolidateUserFixedBilling(updated, targetUser.id, todayStr()) : updated;
+    await data.syncBookings(updated);
+    setBusy(false); setEntries([]); setMonthlyValue(''); setDueDay('5');
+    showToast(`Contrato personalizado criado para ${targetUser.name}: ${entries.length} data(s), ${fmtMoney(finalValue)}/mês.`, 'ok');
+    onDone();
+  };
+
+  return (
+    <>
+      <Card style={{ padding: 18 }}>
+        <div className="rk-display" style={{ fontSize: 15, fontWeight: 650, marginBottom: 12, color: C.ink }}>Adicionar data ao contrato</div>
+        <div className="rk-2col">
+          <Field label="Sala">
+            <select className="rk-focus rk-body" style={inputStyle} value={roomId} onChange={e => setRoomId(e.target.value)}>
+              {rooms.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+            </select>
+          </Field>
+          <Field label="Data"><input type="date" className="rk-focus rk-mono" style={inputStyle} value={date} onChange={e => { setDate(e.target.value); setSlotType(''); }} /></Field>
+        </div>
+        <Field label="Turno">
+          <select className="rk-focus rk-body" style={inputStyle} value={slotType} onChange={e => setSlotType(e.target.value)} disabled={!date}>
+            <option value="">{date ? (availableSlots.length ? 'Selecione...' : 'Sem horário disponível') : 'Escolha a data primeiro'}</option>
+            {availableSlots.map(k => <option key={k} value={k}>{fullSlotLabel(data.shiftHours, k)}</option>)}
+          </select>
+        </Field>
+        <Btn size="sm" variant="ghost" icon={Plus} onClick={addEntry} disabled={!date || !slotType} style={{ width: '100%', justifyContent: 'center' }}>Adicionar data</Btn>
+      </Card>
+
+      <Card style={{ padding: 18 }}>
+        <div className="rk-display" style={{ fontSize: 15, fontWeight: 650, marginBottom: 12, color: C.ink }}>Datas do contrato ({entries.length})</div>
+        {entries.length === 0 ? (
+          <div className="rk-body" style={{ fontSize: 12.5, color: C.inkFaint, marginBottom: 16 }}>Nenhuma data adicionada ainda.</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 16 }}>
+            {entries.map((e, i) => (
+              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '7px 10px', border: `1px solid ${C.borderSoft}`, borderRadius: 8 }}>
+                <span className="rk-body" style={{ fontSize: 12, color: C.ink }}>{e.roomName} · {e.slotLabel} · <span className="rk-mono">{fmtBR(e.date)}</span></span>
+                <button onClick={() => removeEntry(i)} style={{ background: 'none', border: 'none', color: C.danger, cursor: 'pointer', padding: 2 }}><X size={13} /></button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="rk-2col" style={{ marginBottom: 14 }}>
+          <Field label="Valor mensal total (R$)"><input type="number" min="0" className="rk-focus rk-mono" style={inputStyle} value={monthlyValue} onChange={e => setMonthlyValue(e.target.value)} /></Field>
+          <Field label="Dia de vencimento"><input type="number" min="1" max="31" className="rk-focus rk-mono" style={inputStyle} value={dueDay} onChange={e => setDueDay(e.target.value)} /></Field>
+        </div>
+        <Btn onClick={submitContract} disabled={busy || entries.length === 0 || !targetUser} style={{ width: '100%', justifyContent: 'center' }}>{busy ? 'Criando...' : 'Criar contrato personalizado'}</Btn>
+      </Card>
+    </>
   );
 }
 
@@ -1401,10 +1524,9 @@ function ShiftHoursTab({ data, showToast }) {
           <div style={{ border: `1px solid ${C.borderSoft}`, borderRadius: 10, padding: '12px 14px' }}>
             <div className="rk-display" style={{ fontSize: 13.5, fontWeight: 650, color: C.ink, marginBottom: 10 }}>Dia</div>
             <div className="rk-body" style={{ fontSize: 11.5, color: C.inkMuted, marginBottom: 4 }}>{SLOT_BY_KEY.diaria.label}</div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <input type="time" className="rk-focus rk-mono" style={{ ...inputStyle, padding: '6px 8px' }} value={draft.diaria.start} onChange={e => update('diaria', 'start', e.target.value)} />
-              <span className="rk-body" style={{ color: C.inkFaint, fontSize: 11.5 }}>até</span>
-              <input type="time" className="rk-focus rk-mono" style={{ ...inputStyle, padding: '6px 8px' }} value={draft.diaria.end} onChange={e => update('diaria', 'end', e.target.value)} />
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: 4 }}>
+              <span className="rk-body" style={{ fontSize: 11, color: C.inkFaint }}>calculado (manhã + tarde)</span>
+              <span className="rk-mono" style={{ fontSize: 13, fontWeight: 600, color: C.ink }}>{timeRangeLabel(draft, 'diaria')}</span>
             </div>
           </div>
         </div>
@@ -1607,8 +1729,11 @@ function RecurringTab({ data, showToast }) {
                 <div>
                   {u.groups.length === 1 && <div className="rk-body" style={{ fontSize: 14.5, fontWeight: 650, color: C.ink }}>{g.rep.userName}</div>}
                   <div className="rk-body" style={{ fontSize: 12.5, color: C.inkMuted, marginTop: 3, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                    <span>{g.rep.roomName} · {g.rep.slotLabel}</span>
-                    <span>toda {WK_LABEL[weekdayKey(g.rep.date)]}</span>
+                    {g.rep.isCustomContract ? (
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}><Plus size={10} />Contrato personalizado · dias variados</span>
+                    ) : (
+                      <><span>{g.rep.roomName} · {g.rep.slotLabel}</span><span>toda {WK_LABEL[weekdayKey(g.rep.date)]}</span></>
+                    )}
                   </div>
                   <div className="rk-body" style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 4 }}>
                     início <span className="rk-mono">{fmtBR(g.rep.date)}</span> · {g.past} já ocorridas · {g.future} futuras confirmadas
@@ -1658,7 +1783,13 @@ function RecurringTab({ data, showToast }) {
                       <button onClick={() => startEditDueDay(g)} className="rk-body" style={{ background: 'none', border: 'none', color: C.primary, fontSize: 11, fontWeight: 600, cursor: 'pointer', padding: 0, marginTop: 2 }}>alterar</button>
                     </div>
                   )}
-                  {editing?.gid === g.gid && editing.field === 'date' ? (
+                  {g.rep.isCustomContract ? (
+                    <div style={{ textAlign: 'right' }}>
+                      <div className="rk-body" style={{ fontSize: 10.5, fontWeight: 600, color: C.inkFaint, textTransform: 'uppercase' }}>Datas</div>
+                      <div className="rk-mono" style={{ fontSize: 14, fontWeight: 650, color: C.ink }}>{g.future} específicas</div>
+                      <span className="rk-body" style={{ fontSize: 10.5, color: C.inkFaint }}>gerencie pelo Calendário</span>
+                    </div>
+                  ) : editing?.gid === g.gid && editing.field === 'date' ? (
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                       <input type="date" autoFocus className="rk-focus rk-mono" style={{ ...inputStyle, width: 150 }} min={g.rep.date} value={draftDate} onChange={e => setDraftDate(e.target.value)} />
                       <Btn size="sm" variant="success" icon={Check} onClick={() => saveDate(g)}>Salvar</Btn>
