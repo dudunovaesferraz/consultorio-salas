@@ -278,6 +278,7 @@ function profileFromDb(p) {
   return { id: p.id, email: p.email, name: p.name, cpfCnpj: p.cpf_cnpj, birthDate: p.birth_date, phone: p.phone, role: p.role, status: p.status, createdAt: p.created_at ? new Date(p.created_at).getTime() : null };
 }
 function availFromDb(r) { return { id: r.id, roomId: r.room_id, date: r.date, slotType: r.slot_type, status: r.status, groupId: r.group_id }; }
+function calendarFromDb(r) { return { id: r.id, roomId: r.room_id, roomName: r.room_name, date: r.date, slotType: r.slot_type, slotLabel: r.slot_label, status: r.status, userName: r.user_name, recurrence: r.recurrence, groupId: r.group_id }; }
 function uid() { return crypto.randomUUID(); }
 
 /**
@@ -357,6 +358,7 @@ function useAppData() {
   const [shiftHours, setShiftHours] = useState(defaultHours());
   const [bookings, setBookings] = useState([]);
   const [availabilityRows, setAvailabilityRows] = useState([]);
+  const [calendarView, setCalendarView] = useState([]);
   const [ready, setReady] = useState(false);
   const [syncing, setSyncing] = useState(false);
 
@@ -371,18 +373,20 @@ function useAppData() {
 
   const loadAll = useCallback(async (silent) => {
     if (!silent) setSyncing(true);
-    const [{ data: r }, { data: sh }, { data: bk }, { data: pf }, { data: av }] = await Promise.all([
+    const [{ data: r }, { data: sh }, { data: bk }, { data: pf }, { data: av }, { data: cv }] = await Promise.all([
       supabase.from('rooms').select('*').order('sort_order'),
       supabase.from('shift_hours').select('*').eq('id', 1).maybeSingle(),
       supabase.from('bookings').select('*'),
       supabase.from('profiles').select('*'),
       supabase.from('booking_availability').select('*'),
+      supabase.from('calendar_view').select('*'),
     ]);
     setRooms((r || []).map(roomFromDb));
     setShiftHours(sh?.hours ? deriveFullShifts(sh.hours) : defaultHours());
     setBookings((bk || []).map(bookingFromDb));
     setProfiles((pf || []).map(profileFromDb));
     setAvailabilityRows((av || []).map(availFromDb));
+    setCalendarView((cv || []).map(calendarFromDb));
     setSyncing(false);
   }, []);
 
@@ -453,7 +457,7 @@ function useAppData() {
   }, [profiles, loadAll]);
 
   return {
-    session, authEvent, profile, profiles, rooms, shiftHours, bookings, availabilityRows,
+    session, authEvent, profile, profiles, rooms, shiftHours, bookings, availabilityRows, calendarView,
     ready, syncing, refresh: () => loadAll(false),
     syncBookings, saveRooms, saveShiftHours, saveProfiles,
   };
@@ -789,6 +793,104 @@ function OccurrenceEditForm({ data, booking, onCancel, onSave }) {
         <Btn size="sm" variant="success" icon={Check} disabled={!slotStillValid} onClick={() => onSave({ date, roomId, slotType, price: Number(price) || 0 })}>Salvar</Btn>
         <Btn size="sm" variant="ghost" onClick={onCancel}>Cancelar</Btn>
       </div>
+    </div>
+  );
+}
+
+/* ============================== TENANT: SHARED CALENDAR (READ-ONLY) ============================== */
+// Same look as the manager's Calendário, but sourced from `calendar_view` (name + schedule only —
+// no price, payment status or account details) and with no edit/cancel controls.
+function TenantCalendarTab({ data }) {
+  const [cursor, setCursor] = useState(() => { const d = new Date(); d.setDate(1); return d; });
+  const [selectedDate, setSelectedDate] = useState(todayStr());
+  const year = cursor.getFullYear(), month = cursor.getMonth();
+  const first = new Date(year, month, 1);
+  const gridStart = new Date(year, month, 1 - first.getDay());
+  const days = Array.from({ length: 42 }, (_, i) => { const d = new Date(gridStart); d.setDate(gridStart.getDate() + i); return d; });
+
+  const eventsByDate = {};
+  (data.calendarView || []).forEach(e => {
+    if (!eventsByDate[e.date]) eventsByDate[e.date] = [];
+    eventsByDate[e.date].push(e);
+  });
+  Object.values(eventsByDate).forEach(list => list.sort((a, b) => eventTimeLabel(a.slotLabel).localeCompare(eventTimeLabel(b.slotLabel))));
+
+  const dayEvents = eventsByDate[selectedDate] || [];
+
+  return (
+    <div className="rk-fade rk-book-grid">
+      <Card style={{ padding: '16px 16px 18px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+          <button onClick={() => setCursor(new Date(year, month - 1, 1))} className="rk-btn rk-focus" style={{ background: 'none', border: `1px solid ${C.border}`, borderRadius: 7, width: 28, height: 28, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><ChevronLeft size={15} /></button>
+          <span className="rk-display" style={{ fontWeight: 650, fontSize: 16, color: C.ink }}>{MONTH_NAMES[month]} {year}</span>
+          <button onClick={() => setCursor(new Date(year, month + 1, 1))} className="rk-btn rk-focus" style={{ background: 'none', border: `1px solid ${C.border}`, borderRadius: 7, width: 28, height: 28, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><ChevronRight size={15} /></button>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', gap: 4, marginBottom: 4 }}>
+          {WK_SHORT.map(d => <div key={d} className="rk-body" style={{ textAlign: 'center', fontSize: 10.5, fontWeight: 700, color: C.inkFaint, padding: '2px 0' }}>{d}</div>)}
+        </div>
+        <div className="rk-scroll" style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', gap: 4, overflowX: 'auto' }}>
+          {days.map((d, i) => {
+            const ds = dstr(d);
+            const inMonth = d.getMonth() === month;
+            const events = eventsByDate[ds] || [];
+            const isSelected = ds === selectedDate;
+            const isToday = ds === todayStr();
+            return (
+              <button key={i} onClick={() => setSelectedDate(ds)} className="rk-btn rk-focus" style={{
+                minHeight: 76, textAlign: 'left', padding: '4px 5px', borderRadius: 8, minWidth: 0,
+                border: `1.5px solid ${isSelected ? C.primary : isToday ? C.accent : C.borderSoft}`,
+                background: isSelected ? C.primaryLight : C.surface, opacity: inMonth ? 1 : 0.35,
+                cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 2, overflow: 'hidden',
+              }}>
+                <span className="rk-mono" style={{ fontSize: 11, fontWeight: 700, color: isSelected ? C.primaryDark : C.inkMuted }}>{d.getDate()}</span>
+                {events.slice(0, 3).map(e => (
+                  <div key={e.id} className="rk-body" style={{
+                    fontSize: 9.5, fontWeight: 600, borderRadius: 4, padding: '1px 4px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                    background: e.status === 'pendente' ? C.warningLight : C.successLight, color: e.status === 'pendente' ? C.warning : C.success,
+                  }}>{eventTimeLabel(e.slotLabel)} {e.userName}</div>
+                ))}
+                {events.length > 3 && <span className="rk-body" style={{ fontSize: 9, color: C.inkFaint }}>+{events.length - 3} mais</span>}
+              </button>
+            );
+          })}
+        </div>
+        <div style={{ display: 'flex', gap: 14, marginTop: 14, flexWrap: 'wrap' }}>
+          <Legend color={C.successLight} border={C.success} label="Confirmada" />
+          <Legend color={C.warningLight} border={C.warning} label="Pendente" />
+        </div>
+      </Card>
+
+      <Card style={{ padding: 18 }}>
+        <div className="rk-display" style={{ fontSize: 16, fontWeight: 650, marginBottom: 4, color: C.ink }}>{fmtBR(selectedDate)}</div>
+        <div className="rk-body" style={{ fontSize: 12.5, color: C.inkMuted, marginBottom: 16 }}>{WK_LABEL[weekdayKey(selectedDate)]}</div>
+        {dayEvents.length === 0 ? (
+          <div className="rk-body" style={{ fontSize: 13, color: C.inkFaint, padding: '10px 0' }}>Nenhuma reserva neste dia.</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {(data.rooms || []).map(room => {
+              const roomEvents = dayEvents.filter(e => e.roomId === room.id);
+              if (roomEvents.length === 0) return null;
+              return (
+                <div key={room.id}>
+                  <div className="rk-body" style={{ fontSize: 11, fontWeight: 700, color: C.inkFaint, textTransform: 'uppercase', letterSpacing: '.03em', marginBottom: 4 }}>{room.name}</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 10 }}>
+                    {roomEvents.map(e => (
+                      <div key={e.id} style={{ padding: '9px 12px', border: `1px solid ${C.borderSoft}`, borderRadius: 9 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                          <div className="rk-body" style={{ fontSize: 13, fontWeight: 650, color: C.ink }}>{e.userName}</div>
+                          <Badge tone={e.status}>{e.status}</Badge>
+                        </div>
+                        <div className="rk-body" style={{ fontSize: 12, color: C.inkMuted, marginTop: 2 }}>{e.slotLabel}</div>
+                        {e.recurrence === 'fixa_mensal' && <div className="rk-body" style={{ fontSize: 10.5, color: C.inkFaint, marginTop: 2, display: 'flex', alignItems: 'center', gap: 3 }}><Repeat size={9} />fixo mensal</div>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Card>
     </div>
   );
 }
@@ -1965,6 +2067,7 @@ export default function App() {
   ];
   const tenantTabs = [
     { key: 'reservar', label: 'Fazer reserva', icon: CalendarIcon },
+    { key: 'calendario-t', label: 'Calendário', icon: Users },
     { key: 'minhas', label: 'Minhas reservas', icon: KeyRound },
     { key: 'financeiro-t', label: 'Financeiro', icon: CircleDollarSign },
     { key: 'conta', label: 'Minha Conta', icon: User },
@@ -1988,6 +2091,7 @@ export default function App() {
       {profile.role === 'tenant' && (
         <>
           {tab === 'reservar' && <BookTab data={data} profile={profile} showToast={showToast} />}
+          {tab === 'calendario-t' && <TenantCalendarTab data={data} />}
           {tab === 'minhas' && <MyBookingsTab data={data} profile={profile} showToast={showToast} />}
           {tab === 'financeiro-t' && <MyFinanceTab data={data} profile={profile} />}
           {tab === 'conta' && <MyAccountTab profile={profile} showToast={showToast} />}
