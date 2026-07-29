@@ -626,6 +626,10 @@ function eventTimeLabel(slotLabel) {
   const m = (slotLabel || '').match(/\((\d{2}:\d{2})/);
   return m ? m[1] : '';
 }
+function eventTimeRangeLabel(slotLabel) {
+  const m = (slotLabel || '').match(/\(([^)]+)\)/);
+  return m ? m[1] : '';
+}
 function AgendaCalendarTab({ data, showToast }) {
   const [cursor, setCursor] = useState(() => { const d = new Date(); d.setDate(1); return d; });
   const [selectedDate, setSelectedDate] = useState(todayStr());
@@ -1086,7 +1090,7 @@ function BookTab({ data, profile, showToast }) {
                       <div className="rk-body" style={{ fontSize: 10.5, fontWeight: 700, color: C.inkFaint, textTransform: 'uppercase', letterSpacing: '.03em', marginBottom: 3 }}>{r.name}</div>
                       {roomEvents.map(e => (
                         <div key={e.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '5px 8px', background: e.status === 'pendente' ? C.warningLight : C.successLight, borderRadius: 6, marginBottom: 3 }}>
-                          <span className="rk-body" style={{ fontSize: 11.5, color: e.status === 'pendente' ? C.warning : C.success, fontWeight: 600 }}>{eventTimeLabel(e.slotLabel)} · {e.userName}</span>
+                          <span className="rk-body" style={{ fontSize: 11.5, color: e.status === 'pendente' ? C.warning : C.success, fontWeight: 600 }}>{eventTimeRangeLabel(e.slotLabel)} · {e.userName}</span>
                         </div>
                       ))}
                     </div>
@@ -1335,7 +1339,7 @@ function ManagerBookTab({ data, profile, showToast }) {
                           <div className="rk-body" style={{ fontSize: 10.5, fontWeight: 700, color: C.inkFaint, textTransform: 'uppercase', letterSpacing: '.03em', marginBottom: 3 }}>{r.name}</div>
                           {roomEvents.map(e => (
                             <div key={e.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '5px 8px', background: e.status === 'pendente' ? C.warningLight : C.successLight, borderRadius: 6, marginBottom: 3 }}>
-                              <span className="rk-body" style={{ fontSize: 11.5, color: e.status === 'pendente' ? C.warning : C.success, fontWeight: 600 }}>{eventTimeLabel(e.slotLabel)} · {e.userName}</span>
+                              <span className="rk-body" style={{ fontSize: 11.5, color: e.status === 'pendente' ? C.warning : C.success, fontWeight: 600 }}>{eventTimeRangeLabel(e.slotLabel)} · {e.userName}</span>
                             </div>
                           ))}
                         </div>
