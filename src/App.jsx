@@ -260,7 +260,7 @@ function bookingFromDb(r) {
     requestedAt: r.requested_at ? new Date(r.requested_at).getTime() : null,
     confirmedAt: r.confirmed_at ? new Date(r.confirmed_at).getTime() : null,
     groupId: r.group_id, recurrenceEndDate: r.recurrence_end_date, dueDay: r.due_day || null,
-    isCustomContract: !!r.is_custom_contract,
+    isCustomContract: !!r.is_custom_contract, pendingChange: r.pending_change || null,
   };
 }
 function bookingToDb(b) {
@@ -271,7 +271,7 @@ function bookingToDb(b) {
     requested_at: b.requestedAt ? new Date(b.requestedAt).toISOString() : new Date().toISOString(),
     confirmed_at: b.confirmedAt ? new Date(b.confirmedAt).toISOString() : null,
     group_id: b.groupId || null, recurrence_end_date: b.recurrenceEndDate || null, due_day: b.dueDay || null,
-    is_custom_contract: !!b.isCustomContract,
+    is_custom_contract: !!b.isCustomContract, pending_change: b.pendingChange || null,
   };
 }
 function profileFromDb(p) {
@@ -1142,27 +1142,89 @@ function BookTab({ data, profile, showToast }) {
 /* ============================== TENANT: MY BOOKINGS ============================== */
 function MyBookingsTab({ data, profile, showToast }) {
   const mine = (data.bookings || []).filter(b => b.userId === profile.id).sort((a, b) => b.date < a.date ? -1 : 1);
+  const [editingId, setEditingId] = useState(null); // direct edit of a pending request
+  const [requestingId, setRequestingId] = useState(null); // change request on a confirmed booking
+
   const cancel = async (id) => { await data.syncBookings((data.bookings || []).map(b => b.id === id ? { ...b, status: 'cancelada' } : b)); showToast('Solicitação cancelada.', 'info'); };
+
+  const savePendingEdit = async (booking, changes) => {
+    const st = SLOT_BY_KEY[changes.slotType];
+    const room = (data.rooms || []).find(r => r.id === changes.roomId);
+    const updated = (data.bookings || []).map(b => b.id === booking.id ? { ...b, ...changes, price: room.prices[st.priceKey] } : b);
+    await data.syncBookings(updated);
+    setEditingId(null);
+    showToast('Solicitação atualizada.', 'ok');
+  };
+
+  const requestChange = async (booking, changes) => {
+    const updated = (data.bookings || []).map(b => b.id === booking.id ? { ...b, pendingChange: { type: 'change', ...changes, requestedAt: Date.now() } } : b);
+    await data.syncBookings(updated);
+    setRequestingId(null);
+    showToast('Solicitação de alteração enviada ao gestor.', 'ok');
+  };
+
+  const requestCancel = async (booking) => {
+    const updated = (data.bookings || []).map(b => b.id === booking.id ? { ...b, pendingChange: { type: 'cancel', requestedAt: Date.now() } } : b);
+    await data.syncBookings(updated);
+    showToast('Solicitação de cancelamento enviada ao gestor.', 'ok');
+  };
+
+  const withdrawRequest = async (booking) => {
+    const updated = (data.bookings || []).map(b => b.id === booking.id ? { ...b, pendingChange: null } : b);
+    await data.syncBookings(updated);
+    showToast('Solicitação retirada.', 'info');
+  };
+
   if (mine.length === 0) return <div className="rk-body rk-fade" style={{ color: C.inkFaint, fontSize: 14, padding: '30px 0' }}>Você ainda não fez nenhuma reserva.</div>;
   return (
     <div className="rk-fade" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       {mine.map(b => (
-        <Card key={b.id} style={{ padding: '13px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-            <div className="rk-body" style={{ fontSize: 14, fontWeight: 600, color: C.ink }}>{b.roomName} · {b.slotLabel}</div>
-            <div className="rk-body" style={{ fontSize: 12, color: C.inkMuted, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-              <span className="rk-mono">{fmtBR(b.date)}</span>
-              {b.recurrence === 'fixa_mensal' && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}><Repeat size={10} />fixo mensal até <span className="rk-mono">{fmtBR(b.recurrenceEndDate)}</span></span>}
-              {b.recurrence === 'fixa_mensal' && b.price === 0
-                ? <span className="rk-mono" style={{ color: C.inkFaint }}>incluso na mensalidade</span>
-                : <span className="rk-mono">{fmtMoney(b.price)}</span>}
+        <Card key={b.id} style={{ padding: '13px 16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+              <div className="rk-body" style={{ fontSize: 14, fontWeight: 600, color: C.ink }}>{b.roomName} · {b.slotLabel}</div>
+              <div className="rk-body" style={{ fontSize: 12, color: C.inkMuted, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <span className="rk-mono">{fmtBR(b.date)}</span>
+                {b.recurrence === 'fixa_mensal' && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}><Repeat size={10} />fixo mensal até <span className="rk-mono">{fmtBR(b.recurrenceEndDate)}</span></span>}
+                {b.recurrence === 'fixa_mensal' && b.price === 0
+                  ? <span className="rk-mono" style={{ color: C.inkFaint }}>incluso na mensalidade</span>
+                  : <span className="rk-mono">{fmtMoney(b.price)}</span>}
+              </div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <Badge tone={b.status}>{b.status}</Badge>
+              {paymentBadgeStatus(b) && <Badge tone={paymentBadgeStatus(b)}>{paymentBadgeStatus(b)}</Badge>}
+              {b.status === 'pendente' && !editingId && (
+                <>
+                  <Btn size="sm" variant="subtle" icon={ChevronRight} onClick={() => setEditingId(b.id)}>Editar</Btn>
+                  <Btn size="sm" variant="danger" icon={X} onClick={() => cancel(b.id)}>Cancelar</Btn>
+                </>
+              )}
+              {b.status === 'confirmada' && !b.pendingChange && (
+                <>
+                  <Btn size="sm" variant="subtle" icon={ChevronRight} onClick={() => setRequestingId(b.id)}>Solicitar alteração</Btn>
+                  <Btn size="sm" variant="danger" icon={X} onClick={() => requestCancel(b)}>Solicitar cancelamento</Btn>
+                </>
+              )}
             </div>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Badge tone={b.status}>{b.status}</Badge>
-            {paymentBadgeStatus(b) && <Badge tone={paymentBadgeStatus(b)}>{paymentBadgeStatus(b)}</Badge>}
-            {b.status === 'pendente' && <Btn size="sm" variant="danger" icon={X} onClick={() => cancel(b.id)}>Cancelar</Btn>}
-          </div>
+          {b.pendingChange && (
+            <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px dashed ${C.borderSoft}`, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <Badge tone="pendente">aguardando aprovação</Badge>
+              <span className="rk-body" style={{ fontSize: 12, color: C.inkMuted }}>
+                {b.pendingChange.type === 'cancel'
+                  ? 'Você solicitou o cancelamento desta reserva.'
+                  : <>Alteração solicitada: {b.pendingChange.roomName} · {b.pendingChange.slotLabel} · <span className="rk-mono">{fmtBR(b.pendingChange.date)}</span></>}
+              </span>
+              <button onClick={() => withdrawRequest(b)} className="rk-body" style={{ background: 'none', border: 'none', color: C.primary, fontSize: 11.5, fontWeight: 600, cursor: 'pointer', padding: 0 }}>retirar solicitação</button>
+            </div>
+          )}
+          {editingId === b.id && (
+            <TenantOccurrenceForm data={data} booking={b} mode="edit" onCancel={() => setEditingId(null)} onSubmit={(changes) => savePendingEdit(b, changes)} />
+          )}
+          {requestingId === b.id && (
+            <TenantOccurrenceForm data={data} booking={b} mode="request" onCancel={() => setRequestingId(null)} onSubmit={(changes) => requestChange(b, changes)} />
+          )}
         </Card>
       ))}
     </div>
@@ -1476,8 +1538,51 @@ function CustomContractBuilder({ data, targetUser, showToast, onDone }) {
 }
 
 /* ============================== MANAGER: REQUESTS ============================== */
+/* ============================== TENANT: EDIT / REQUEST-CHANGE FORM ============================== */
+function TenantOccurrenceForm({ data, booking, mode, onCancel, onSubmit }) {
+  const [date, setDate] = useState(booking.date);
+  const [roomId, setRoomId] = useState(booking.roomId);
+  const [slotType, setSlotType] = useState(booking.slotType);
+  const room = (data.rooms || []).find(r => r.id === roomId);
+  const rows = (data.availabilityRows || []).filter(r => r.id !== booking.id);
+  const availableSlots = room && date ? getAvailableSlotKeys(room, date, rows) : [];
+  const slotStillValid = availableSlots.includes(slotType);
+
+  useEffect(() => {
+    if (availableSlots.length && !availableSlots.includes(slotType)) setSlotType(availableSlots[0]);
+  }, [roomId, date]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <div style={{ marginTop: 8, paddingTop: 10, borderTop: `1px dashed ${C.borderSoft}`, display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div className="rk-2col">
+        <Field label="Nova data"><input type="date" className="rk-focus rk-mono" style={inputStyle} value={date} onChange={e => setDate(e.target.value)} /></Field>
+        <Field label="Sala">
+          <select className="rk-focus rk-body" style={inputStyle} value={roomId} onChange={e => setRoomId(e.target.value)}>
+            {(data.rooms || []).map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+          </select>
+        </Field>
+      </div>
+      <Field label="Turno">
+        <select className="rk-focus rk-body" style={inputStyle} value={slotType} onChange={e => setSlotType(e.target.value)}>
+          {availableSlots.length === 0 && <option value="">Sem horário disponível</option>}
+          {availableSlots.map(k => <option key={k} value={k}>{fullSlotLabel(data.shiftHours, k)}</option>)}
+        </select>
+      </Field>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <Btn size="sm" variant="success" icon={Check} disabled={!slotStillValid || !room}
+          onClick={() => onSubmit({ date, roomId, roomName: room.name, slotType, slotLabel: fullSlotLabel(data.shiftHours, slotType) })}>
+          {mode === 'edit' ? 'Salvar' : 'Enviar solicitação'}
+        </Btn>
+        <Btn size="sm" variant="ghost" onClick={onCancel}>Cancelar</Btn>
+      </div>
+    </div>
+  );
+}
+
+
 function RequestsTab({ data, showToast }) {
   const pending = (data.bookings || []).filter(b => b.status === 'pendente').sort((a, b) => a.requestedAt - b.requestedAt);
+  const changeRequests = (data.bookings || []).filter(b => b.pendingChange).sort((a, b) => a.pendingChange.requestedAt - b.pendingChange.requestedAt);
   const [negPrices, setNegPrices] = useState({});
   const [dueDays, setDueDays] = useState({});
   const priceFor = (b) => (negPrices[b.id] !== undefined ? negPrices[b.id] : b.price);
@@ -1498,10 +1603,67 @@ function RequestsTab({ data, showToast }) {
   };
   const reject = async (id) => { await data.syncBookings((data.bookings || []).map(b => b.id === id ? { ...b, status: 'recusada' } : b)); showToast('Solicitação recusada.', 'info'); };
 
-  if (pending.length === 0) return <div className="rk-body rk-fade" style={{ color: C.inkFaint, fontSize: 14, padding: '30px 0' }}>Nenhuma solicitação pendente no momento.</div>;
+  const approveChange = async (b) => {
+    if (b.pendingChange.type === 'cancel') {
+      const cancelled = cancelBookingUpdate(b, data.bookings || []);
+      const updated = cancelled.map(x => x.id === b.id ? { ...x, pendingChange: null } : x);
+      await data.syncBookings(updated);
+      showToast(`Cancelamento de ${b.userName} aprovado.`, 'ok');
+      return;
+    }
+    const { date, roomId, roomName, slotType, slotLabel } = b.pendingChange;
+    const room = (data.rooms || []).find(r => r.id === roomId);
+    const rows = (data.availabilityRows || []).filter(r => r.id !== b.id);
+    const avail = room ? getAvailableSlotKeys(room, date, rows) : [];
+    if (!avail.includes(slotType)) { showToast('Esse horário não está mais disponível — recuse e oriente o usuário a solicitar outro.', 'err'); return; }
+    const updated = (data.bookings || []).map(x => x.id === b.id ? { ...x, date, roomId, roomName, slotType, slotLabel, pendingChange: null } : x);
+    await data.syncBookings(updated);
+    showToast(`Alteração de ${b.userName} aprovada.`, 'ok');
+  };
+  const rejectChange = async (b) => {
+    const updated = (data.bookings || []).map(x => x.id === b.id ? { ...x, pendingChange: null } : x);
+    await data.syncBookings(updated);
+    showToast('Alteração recusada — reserva original mantida.', 'info');
+  };
+
+  if (pending.length === 0 && changeRequests.length === 0) return <div className="rk-body rk-fade" style={{ color: C.inkFaint, fontSize: 14, padding: '30px 0' }}>Nenhuma solicitação pendente no momento.</div>;
   return (
-    <div className="rk-fade" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      {pending.map(b => (
+    <div className="rk-fade" style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+      {changeRequests.length > 0 && (
+        <div>
+          <div className="rk-display" style={{ fontSize: 15, fontWeight: 650, color: C.ink, marginBottom: 10 }}>Alterações solicitadas</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {changeRequests.map(b => (
+              <Card key={b.id} style={{ padding: '15px 18px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+                <div>
+                  <div className="rk-body" style={{ fontSize: 14.5, fontWeight: 650, color: C.ink }}>{b.userName}</div>
+                  <div className="rk-body" style={{ fontSize: 12.5, color: C.inkMuted, marginTop: 3 }}>
+                    Atual: {b.roomName} · {b.slotLabel} · <span className="rk-mono">{fmtBR(b.date)}</span>
+                  </div>
+                  {b.pendingChange.type === 'cancel' ? (
+                    <div className="rk-body" style={{ fontSize: 12.5, color: C.danger, marginTop: 3, fontWeight: 600 }}>Solicitou cancelamento desta reserva</div>
+                  ) : (
+                    <div className="rk-body" style={{ fontSize: 12.5, color: C.primaryDark, marginTop: 3, fontWeight: 600 }}>
+                      Novo: {b.pendingChange.roomName} · {b.pendingChange.slotLabel} · <span className="rk-mono">{fmtBR(b.pendingChange.date)}</span>
+                    </div>
+                  )}
+                  <div className="rk-body" style={{ fontSize: 11, color: C.inkFaint, marginTop: 3 }}>solicitado em {fmtDateTime(b.pendingChange.requestedAt)}</div>
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <Btn size="sm" variant="success" icon={Check} onClick={() => approveChange(b)}>Aprovar</Btn>
+                  <Btn size="sm" variant="danger" icon={X} onClick={() => rejectChange(b)}>Recusar</Btn>
+                </div>
+              </Card>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {pending.length > 0 && (
+        <div>
+          {changeRequests.length > 0 && <div className="rk-display" style={{ fontSize: 15, fontWeight: 650, color: C.ink, marginBottom: 10 }}>Novas solicitações</div>}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {pending.map(b => (
         <Card key={b.id} style={{ padding: '15px 18px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
           <div>
             <div className="rk-body" style={{ fontSize: 14.5, fontWeight: 650, color: C.ink }}>{b.userName}</div>
@@ -1526,7 +1688,10 @@ function RequestsTab({ data, showToast }) {
           </div>
           <div style={{ display: 'flex', gap: 8 }}><Btn size="sm" variant="success" icon={Check} onClick={() => confirm(b)}>Confirmar</Btn><Btn size="sm" variant="danger" icon={X} onClick={() => reject(b.id)}>Recusar</Btn></div>
         </Card>
-      ))}
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2105,7 +2270,7 @@ export default function App() {
     );
   }
 
-  const pendingCount = (data.bookings || []).filter(b => b.status === 'pendente').length;
+  const pendingCount = (data.bookings || []).filter(b => b.status === 'pendente' || b.pendingChange).length;
   const pendingUsers = (data.profiles || []).filter(u => u.role === 'tenant' && u.status === 'pendente').length;
 
   const managerTabs = [
