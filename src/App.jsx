@@ -1071,6 +1071,31 @@ function BookTab({ data, profile, showToast }) {
         <div className="rk-display" style={{ fontSize: 16, fontWeight: 650, marginBottom: 4, color: C.ink }}>{selectedDate ? fmtBR(selectedDate) : 'Selecione uma data'}</div>
         <div className="rk-body" style={{ fontSize: 12.5, color: C.inkMuted, marginBottom: 16 }}>{room.name}</div>
         {!selectedDate && <div className="rk-body" style={{ fontSize: 13, color: C.inkFaint, padding: '20px 0' }}>Clique em um dia disponível no calendário ao lado.</div>}
+        {selectedDate && (() => {
+          const dayEvents = (data.calendarView || []).filter(e => e.date === selectedDate);
+          if (dayEvents.length === 0) return null;
+          return (
+            <div style={{ marginBottom: 18, paddingBottom: 16, borderBottom: `1px solid ${C.borderSoft}` }}>
+              <div className="rk-body" style={{ fontSize: 12.5, fontWeight: 600, color: C.inkMuted, marginBottom: 8 }}>Quem já está reservado neste dia</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {rooms.map(r => {
+                  const roomEvents = dayEvents.filter(e => e.roomId === r.id);
+                  if (roomEvents.length === 0) return null;
+                  return (
+                    <div key={r.id}>
+                      <div className="rk-body" style={{ fontSize: 10.5, fontWeight: 700, color: C.inkFaint, textTransform: 'uppercase', letterSpacing: '.03em', marginBottom: 3 }}>{r.name}</div>
+                      {roomEvents.map(e => (
+                        <div key={e.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '5px 8px', background: e.status === 'pendente' ? C.warningLight : C.successLight, borderRadius: 6, marginBottom: 3 }}>
+                          <span className="rk-body" style={{ fontSize: 11.5, color: e.status === 'pendente' ? C.warning : C.success, fontWeight: 600 }}>{eventTimeLabel(e.slotLabel)} · {e.userName}</span>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })()}
         {selectedDate && availableForDate.length === 0 && <div className="rk-body" style={{ fontSize: 13, color: C.danger, padding: '12px 0' }}>Sem horários disponíveis para esta data.</div>}
         {selectedDate && availableForDate.length > 0 && (
           <>
@@ -1295,6 +1320,31 @@ function ManagerBookTab({ data, profile, showToast }) {
             <div className="rk-display" style={{ fontSize: 16, fontWeight: 650, marginBottom: 4, color: C.ink }}>{selectedDate ? fmtBR(selectedDate) : 'Selecione uma data'}</div>
             <div className="rk-body" style={{ fontSize: 12.5, color: C.inkMuted, marginBottom: 16 }}>{room.name}</div>
             {!selectedDate && <div className="rk-body" style={{ fontSize: 13, color: C.inkFaint, padding: '20px 0' }}>Clique em um dia disponível no calendário ao lado.</div>}
+            {selectedDate && (() => {
+              const dayEvents = (data.calendarView || []).filter(e => e.date === selectedDate);
+              if (dayEvents.length === 0) return null;
+              return (
+                <div style={{ marginBottom: 18, paddingBottom: 16, borderBottom: `1px solid ${C.borderSoft}` }}>
+                  <div className="rk-body" style={{ fontSize: 12.5, fontWeight: 600, color: C.inkMuted, marginBottom: 8 }}>Quem já está reservado neste dia</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {(data.rooms || []).map(r => {
+                      const roomEvents = dayEvents.filter(e => e.roomId === r.id);
+                      if (roomEvents.length === 0) return null;
+                      return (
+                        <div key={r.id}>
+                          <div className="rk-body" style={{ fontSize: 10.5, fontWeight: 700, color: C.inkFaint, textTransform: 'uppercase', letterSpacing: '.03em', marginBottom: 3 }}>{r.name}</div>
+                          {roomEvents.map(e => (
+                            <div key={e.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '5px 8px', background: e.status === 'pendente' ? C.warningLight : C.successLight, borderRadius: 6, marginBottom: 3 }}>
+                              <span className="rk-body" style={{ fontSize: 11.5, color: e.status === 'pendente' ? C.warning : C.success, fontWeight: 600 }}>{eventTimeLabel(e.slotLabel)} · {e.userName}</span>
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
             {selectedDate && availableForDate.length === 0 && <div className="rk-body" style={{ fontSize: 13, color: C.danger, padding: '12px 0' }}>Sem horários disponíveis para esta data.</div>}
             {selectedDate && availableForDate.length > 0 && (
               <>
