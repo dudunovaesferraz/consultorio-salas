@@ -256,7 +256,7 @@ function bookingFromDb(r) {
   return {
     id: r.id, userId: r.user_id, userName: r.user_name, roomId: r.room_id, roomName: r.room_name,
     date: r.date, slotType: r.slot_type, slotLabel: r.slot_label, recurrence: r.recurrence,
-    price: Number(r.price), status: r.status, paymentStatus: r.payment_status, paidAt: r.paid_at,
+    price: Number(r.price), status: r.status, paymentStatus: r.payment_status, paidAt: r.paid_at ? new Date(r.paid_at).getTime() : null,
     requestedAt: r.requested_at ? new Date(r.requested_at).getTime() : null,
     confirmedAt: r.confirmed_at ? new Date(r.confirmed_at).getTime() : null,
     groupId: r.group_id, recurrenceEndDate: r.recurrence_end_date, dueDay: r.due_day || null,
@@ -267,7 +267,7 @@ function bookingToDb(b) {
   return {
     id: b.id, user_id: b.userId, user_name: b.userName, room_id: b.roomId, room_name: b.roomName,
     date: b.date, slot_type: b.slotType, slot_label: b.slotLabel, recurrence: b.recurrence,
-    price: b.price, status: b.status, payment_status: b.paymentStatus, paid_at: b.paidAt,
+    price: b.price, status: b.status, payment_status: b.paymentStatus, paid_at: b.paidAt ? new Date(b.paidAt).toISOString() : null,
     requested_at: b.requestedAt ? new Date(b.requestedAt).toISOString() : new Date().toISOString(),
     confirmed_at: b.confirmedAt ? new Date(b.confirmedAt).toISOString() : null,
     group_id: b.groupId || null, recurrence_end_date: b.recurrenceEndDate || null, due_day: b.dueDay || null,
