@@ -361,6 +361,7 @@ function useAppData() {
   const [calendarView, setCalendarView] = useState([]);
   const [ready, setReady] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [dbError, setDbError] = useState(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session ?? null));
@@ -424,14 +425,18 @@ function useAppData() {
       else if (JSON.stringify(orig) !== JSON.stringify(b)) toUpdate.push(b);
     }
     setBookings(updatedArray);
-    if (toInsert.length) { const { error } = await supabase.from('bookings').insert(toInsert.map(bookingToDb)); if (error) console.error(error); }
-    for (const b of toUpdate) { const { id, ...patch } = bookingToDb(b); const { error } = await supabase.from('bookings').update(patch).eq('id', id); if (error) console.error(error); }
+    const errors = [];
+    if (toInsert.length) { const { error } = await supabase.from('bookings').insert(toInsert.map(bookingToDb)); if (error) { console.error(error); errors.push(error); } }
+    for (const b of toUpdate) { const { id, ...patch } = bookingToDb(b); const { error } = await supabase.from('bookings').update(patch).eq('id', id); if (error) { console.error(error); errors.push(error); } }
+    if (errors.length) setDbError(`Não foi possível salvar: ${errors[0].message}`);
     loadAll(true);
   }, [bookings, loadAll]);
 
   const saveRooms = useCallback(async (updatedArray) => {
     setRooms(updatedArray);
-    for (const r of updatedArray) { const { id, ...patch } = roomToDb(r); const { error } = await supabase.from('rooms').update(patch).eq('id', id); if (error) console.error(error); }
+    const errors = [];
+    for (const r of updatedArray) { const { id, ...patch } = roomToDb(r); const { error } = await supabase.from('rooms').update(patch).eq('id', id); if (error) { console.error(error); errors.push(error); } }
+    if (errors.length) setDbError(`Não foi possível salvar: ${errors[0].message}`);
     loadAll(true);
   }, [loadAll]);
 
@@ -439,25 +444,27 @@ function useAppData() {
     const merged = deriveFullShifts(hours);
     setShiftHours(merged);
     const { error } = await supabase.from('shift_hours').update({ hours: merged, updated_at: new Date().toISOString() }).eq('id', 1);
-    if (error) console.error(error);
+    if (error) { console.error(error); setDbError(`Não foi possível salvar: ${error.message}`); }
     loadAll(true);
   }, [loadAll]);
 
   const saveProfiles = useCallback(async (updatedArray) => {
     const originalById = new Map(profiles.map(p => [p.id, p]));
     setProfiles(updatedArray);
+    const errors = [];
     for (const p of updatedArray) {
       const orig = originalById.get(p.id);
       if (orig && (orig.status !== p.status || orig.role !== p.role)) {
         const { error } = await supabase.from('profiles').update({ status: p.status, role: p.role }).eq('id', p.id);
-        if (error) console.error(error);
+        if (error) { console.error(error); errors.push(error); }
       }
     }
+    if (errors.length) setDbError(`Não foi possível salvar: ${errors[0].message}`);
     loadAll(true);
   }, [profiles, loadAll]);
 
   return {
-    session, authEvent, profile, profiles, rooms, shiftHours, bookings, availabilityRows, calendarView,
+    session, authEvent, profile, profiles, rooms, shiftHours, bookings, availabilityRows, calendarView, dbError, clearDbError: () => setDbError(null),
     ready, syncing, refresh: () => loadAll(false),
     syncBookings, saveRooms, saveShiftHours, saveProfiles,
   };
@@ -2233,6 +2240,10 @@ export default function App() {
   const toastTimer = useRef(null);
 
   const showToast = (msg, type = 'info') => { setToast({ msg, type }); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToast(null), 3200); };
+
+  useEffect(() => {
+    if (data.dbError) { showToast(data.dbError, 'err'); data.clearDbError(); }
+  }, [data.dbError]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { if (data.authEvent === 'PASSWORD_RECOVERY') setRecoveryMode(true); }, [data.authEvent]);
   useEffect(() => { if (data.profile && !tab) setTab(data.profile.role === 'manager' ? 'solicitacoes' : 'reservar'); }, [data.profile]);
