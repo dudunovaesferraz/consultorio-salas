@@ -2168,6 +2168,16 @@ function FinanceTab({ data, showToast }) {
   const futureSorted = futureAll.slice().sort((a, b) => dueDateFor(a) < dueDateFor(b) ? -1 : 1);
 
   const togglePaid = async (b) => { const updated = (data.bookings || []).map(x => x.id === b.id ? { ...x, paymentStatus: x.paymentStatus === 'pago' ? 'pendente' : 'pago', paidAt: x.paymentStatus === 'pago' ? null : Date.now() } : x); await data.syncBookings(updated); showToast(b.paymentStatus === 'pago' ? 'Marcado como não pago.' : 'Pagamento registrado.', 'ok'); };
+  const [editingPriceId, setEditingPriceId] = useState(null);
+  const [draftPrice, setDraftPrice] = useState('');
+  const startEditPrice = (b) => { setEditingPriceId(b.id); setDraftPrice(String(b.price)); };
+  const savePrice = async (b) => {
+    const newPrice = Number(draftPrice) || 0;
+    const updated = (data.bookings || []).map(x => x.id === b.id ? { ...x, price: newPrice } : x);
+    await data.syncBookings(updated);
+    setEditingPriceId(null);
+    showToast(`Valor atualizado para ${fmtMoney(newPrice)}.`, 'ok');
+  };
   const cancelBooking = async (b) => {
     if (b.recurrence === 'fixa_mensal') {
       // Waive just this month's charge — the room stays reserved, only the bill goes away.
@@ -2193,8 +2203,20 @@ function FinanceTab({ data, showToast }) {
             {b.recurrence === 'fixa_mensal' && <span className="rk-mono"> · vence {fmtBR(dueDateFor(b))}</span>}
           </div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span className="rk-mono" style={{ fontWeight: 650, color: C.ink, fontSize: 14 }}>{fmtMoney(b.price)}</span><Badge tone={paymentBadgeStatus(b)}>{paymentBadgeStatus(b)}</Badge>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          {editingPriceId === b.id ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <div style={{ position: 'relative' }}>
+                <span className="rk-mono" style={{ position: 'absolute', left: 9, top: 8, fontSize: 12, color: C.inkFaint }}>R$</span>
+                <input type="number" min="0" autoFocus className="rk-focus rk-mono" style={{ ...inputStyle, width: 110, padding: '7px 8px 7px 30px', fontSize: 13 }} value={draftPrice} onChange={e => setDraftPrice(e.target.value)} />
+              </div>
+              <Btn size="sm" variant="success" icon={Check} onClick={() => savePrice(b)}>Salvar</Btn>
+              <Btn size="sm" variant="ghost" onClick={() => setEditingPriceId(null)}>Cancelar</Btn>
+            </div>
+          ) : (
+            <span className="rk-mono" style={{ fontWeight: 650, color: C.ink, fontSize: 14, cursor: 'pointer', borderBottom: `1px dashed ${C.inkFaint}` }} onClick={() => startEditPrice(b)} title="Editar valor">{fmtMoney(b.price)}</span>
+          )}
+          <Badge tone={paymentBadgeStatus(b)}>{paymentBadgeStatus(b)}</Badge>
           <Btn size="sm" variant={b.paymentStatus === 'pago' ? 'subtle' : 'success'} icon={b.paymentStatus === 'pago' ? X : Check} onClick={() => togglePaid(b)}>{b.paymentStatus === 'pago' ? 'Desmarcar' : 'Recebido'}</Btn>
           {b.date >= todayStr() && <Btn size="sm" variant="danger" icon={X} onClick={() => cancelBooking(b)}>{b.recurrence === 'fixa_mensal' ? 'Cancelar cobrança' : 'Cancelar'}</Btn>}
         </div>
