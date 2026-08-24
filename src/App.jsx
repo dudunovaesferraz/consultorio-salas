@@ -1623,9 +1623,13 @@ function RequestsTab({ data, showToast }) {
     const rows = (data.availabilityRows || []).filter(r => r.id !== b.id);
     const avail = room ? getAvailableSlotKeys(room, date, rows) : [];
     if (!avail.includes(slotType)) { showToast('Esse horário não está mais disponível — recuse e oriente o usuário a solicitar outro.', 'err'); return; }
-    const updated = (data.bookings || []).map(x => x.id === b.id ? { ...x, date, roomId, roomName, slotType, slotLabel, pendingChange: null } : x);
+    // One-off bookings: price follows whatever slot/room was actually chosen (meio turno vs turno
+    // completo vs diária all have different rates). Fixed-monthly occurrences keep their negotiated
+    // value untouched, since that's a monthly rate, not tied to this one occurrence's list price.
+    const newPrice = b.recurrence === 'fixa_mensal' ? b.price : room.prices[SLOT_BY_KEY[slotType].priceKey];
+    const updated = (data.bookings || []).map(x => x.id === b.id ? { ...x, date, roomId, roomName, slotType, slotLabel, price: newPrice, pendingChange: null } : x);
     await data.syncBookings(updated);
-    showToast(`Alteração de ${b.userName} aprovada.`, 'ok');
+    showToast(`Alteração de ${b.userName} aprovada${b.recurrence !== 'fixa_mensal' ? ` — valor atualizado para ${fmtMoney(newPrice)}` : ''}.`, 'ok');
   };
   const rejectChange = async (b) => {
     const updated = (data.bookings || []).map(x => x.id === b.id ? { ...x, pendingChange: null } : x);
@@ -1652,6 +1656,11 @@ function RequestsTab({ data, showToast }) {
                   ) : (
                     <div className="rk-body" style={{ fontSize: 12.5, color: C.primaryDark, marginTop: 3, fontWeight: 600 }}>
                       Novo: {b.pendingChange.roomName} · {b.pendingChange.slotLabel} · <span className="rk-mono">{fmtBR(b.pendingChange.date)}</span>
+                      {b.recurrence !== 'fixa_mensal' && (() => {
+                        const room = (data.rooms || []).find(r => r.id === b.pendingChange.roomId);
+                        const newPrice = room ? room.prices[SLOT_BY_KEY[b.pendingChange.slotType].priceKey] : null;
+                        return newPrice != null ? <span className="rk-mono"> · {fmtMoney(newPrice)}{newPrice !== b.price ? ` (era ${fmtMoney(b.price)})` : ''}</span> : null;
+                      })()}
                     </div>
                   )}
                   <div className="rk-body" style={{ fontSize: 11, color: C.inkFaint, marginTop: 3 }}>solicitado em {fmtDateTime(b.pendingChange.requestedAt)}</div>
