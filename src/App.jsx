@@ -372,15 +372,34 @@ function useAppData() {
     return () => sub.subscription.unsubscribe();
   }, []);
 
+  // Supabase/PostgREST caps a plain select at 1000 rows by default. The bookings table (and the
+  // views derived from it) can easily grow past that as recurring weekly occurrences pile up, so
+  // a plain .select('*') silently drops whatever falls after row 1000 — including, unpredictably,
+  // recent pending requests. Page through in 1000-row chunks so nothing gets left behind.
+  const fetchAllRows = async (table, selectStr) => {
+    let all = [];
+    let from = 0;
+    const pageSize = 1000;
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const { data, error } = await supabase.from(table).select(selectStr).range(from, from + pageSize - 1);
+      if (error) { console.error(error); break; }
+      all = all.concat(data || []);
+      if (!data || data.length < pageSize) break;
+      from += pageSize;
+    }
+    return all;
+  };
+
   const loadAll = useCallback(async (silent) => {
     if (!silent) setSyncing(true);
-    const [{ data: r }, { data: sh }, { data: bk }, { data: pf }, { data: av }, { data: cv }] = await Promise.all([
+    const [{ data: r }, { data: sh }, { data: pf }, bk, av, cv] = await Promise.all([
       supabase.from('rooms').select('*').order('sort_order'),
       supabase.from('shift_hours').select('*').eq('id', 1).maybeSingle(),
-      supabase.from('bookings').select('*'),
       supabase.from('profiles').select('*'),
-      supabase.from('booking_availability').select('*'),
-      supabase.from('calendar_view').select('*'),
+      fetchAllRows('bookings', '*'),
+      fetchAllRows('booking_availability', '*'),
+      fetchAllRows('calendar_view', '*'),
     ]);
     setRooms((r || []).map(roomFromDb));
     setShiftHours(sh?.hours ? deriveFullShifts(sh.hours) : defaultHours());
